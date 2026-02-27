@@ -1,0 +1,8 @@
+{
+  "name": "moodle-tiny_ketcher",
+  "version": "1.0.0",
+  "devDependencies": {
+    "grunt": "^1.6.1",
+    "grunt-contrib-requirejs": "^1.0.0"
+  }
+}

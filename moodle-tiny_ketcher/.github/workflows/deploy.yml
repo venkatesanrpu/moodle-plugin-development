@@ -1,0 +1,35 @@
+name: Compile AMD JS
+
+on:
+  push:
+    paths:
+      - 'amd/src/**/*.js'
+      - 'Gruntfile.js'
+      - 'package.json'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+jobs:
+  compile-amd:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run grunt amd
+        run: npx grunt amd
+
+      - name: Commit and push changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Auto-compiled AMD JS after src changes"
+          file_pattern: 'amd/build/*'
