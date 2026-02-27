@@ -1,0 +1,727 @@
+{{!
+    FILE: blocks/ai_assistant/templates/history_widget.mustache
+    PURPOSE: Modal overlay for viewing chat history within the AI Assistant widget
+    FEATURES: Subject/Topic/Lesson filtering + General (unfiltered) category + MCQ formatting with LaTeX
+    DEPENDENCIES: katex (loaded by main.mustache)
+}}
+
+<!-- History Modal Overlay -->
+<div id="ai-assistant-history-modal" class="ai-assistant-history-modal" style="display: none;">
+    <div class="ai-assistant-history-modal-content">
+        
+        <!-- Header -->
+        <div class="ai-assistant-history-modal-header">
+            <h3>💬 Chat History</h3>
+            <button id="ai-assistant-history-close" class="ai-assistant-history-close-button" aria-label="Close History">
+                ×
+            </button>
+        </div>
+        
+        <!-- Filter Controls -->
+        <div class="ai-assistant-history-filters">
+            <div class="filter-row">
+                <div class="filter-group">
+                    <label for="history-subject">Subject</label>
+                    <select id="history-subject" class="filter-select">
+                        <option value="">-- Select Subject --</option>
+                    </select>
+                </div>
+                
+                <div class="filter-group">
+                    <label for="history-topic">Topic</label>
+                    <select id="history-topic" class="filter-select" disabled>
+                        <option value="">-- Select Topic --</option>
+                    </select>
+                </div>
+                
+                <div class="filter-group">
+                    <label for="history-lesson">Lesson</label>
+                    <select id="history-lesson" class="filter-select" disabled>
+                        <option value="">-- Select Lesson --</option>
+                    </select>
+                </div>
+            </div>
+            
+            <button id="history-load-button" class="history-load-button" disabled>
+                View History
+            </button>
+        </div>
+        
+        <!-- History Content (Accordion) -->
+        <div id="ai-assistant-history-body" class="ai-assistant-history-body">
+            <div class="empty-state">
+                <p>📚 Select a category above to view your conversation history</p>
+            </div>
+        </div>
+        
+        <!-- Pagination (if needed in future) -->
+        <div id="ai-assistant-history-pagination" class="ai-assistant-history-pagination" style="display: none;">
+            <!-- Pagination controls here -->
+        </div>
+        
+    </div>
+</div>
+
+<script>
+(function() {
+    'use strict';
+    
+    // Check if already initialized
+    if (window.aiAssistantHistoryWidgetInitialized) {
+        console.log('⚠️ History Widget already initialized');
+        return;
+    }
+    
+    console.log('🔧 Initializing History Widget...');
+    
+    // ==================== DOM ELEMENTS ====================
+    const modal = document.getElementById('ai-assistant-history-modal');
+    const closeButton = document.getElementById('ai-assistant-history-close');
+    const historyBody = document.getElementById('ai-assistant-history-body');
+    const subjectSelect = document.getElementById('history-subject');
+    const topicSelect = document.getElementById('history-topic');
+    const lessonSelect = document.getElementById('history-lesson');
+    const loadButton = document.getElementById('history-load-button');
+    const pagination = document.getElementById('ai-assistant-history-pagination');
+    
+    if (!modal || !closeButton || !historyBody) {
+        console.error('❌ History Widget: Required DOM elements not found');
+        return;
+    }
+    
+    // ==================== STATE ====================
+    let currentPage = 1;
+    let syllabusData = null;
+    const courseid = {{courseid}};
+    const sesskey = '{{sesskey}}';
+    const historyAjaxUrl = '{{historywidgetajaxurl}}';
+    
+    // ==================== UTILITY FUNCTIONS ====================
+    
+    const escapeHtml = (text) => {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    };
+    
+    // ==================== LATEX RENDERING ====================
+    
+    /**
+     * Render LaTeX in text using KaTeX (for regular content)
+     */
+    const renderLatex = (text) => {
+        if (!window.katex) {
+            console.warn('KaTeX not loaded');
+            return { text, placeholders: new Map() };
+        }
+        
+        const latexPlaceholders = new Map();
+        
+        // Display math: \[ ... \]
+        text = text.replace(/\\\[([\s\S]*?)\\\]/g, (match, latex) => {
+            try {
+                const rendered = katex.renderToString(latex.trim(), { displayMode: true, throwOnError: false });
+                const placeholder = `@@KATEX_DISPLAY_${latexPlaceholders.size}@@`;
+                latexPlaceholders.set(placeholder, rendered);
+                return placeholder;
+            } catch (e) {
+                console.error('KaTeX display error:', e);
+                return match;
+            }
+        });
+        
+        // Inline math: \( ... \)
+        text = text.replace(/\\\(([\s\S]*?)\\\)/g, (match, latex) => {
+            try {
+                const rendered = katex.renderToString(latex.trim(), { displayMode: false, throwOnError: false });
+                const placeholder = `@@KATEX_INLINE_${latexPlaceholders.size}@@`;
+                latexPlaceholders.set(placeholder, rendered);
+                return placeholder;
+            } catch (e) {
+                console.error('KaTeX inline error:', e);
+                return match;
+            }
+        });
+        
+        return { text, placeholders: latexPlaceholders };
+    };
+    
+    /**
+     * Render LaTeX in HTML string (for MCQ formatting)
+     */
+    const renderLatexInHTML = (htmlString) => {
+        if (!window.katex) {
+            console.warn('⚠️ KaTeX not loaded for history widget');
+            return htmlString;
+        }
+        
+        let rendered = htmlString;
+        
+        // Display math: \[ ... \]
+        rendered = rendered.replace(/\\\[([\s\S]*?)\\\]/g, (match, latex) => {
+            try {
+                return katex.renderToString(latex.trim(), {
+                    displayMode: true,
+                    throwOnError: false,
+                    output: 'html'
+                });
+            } catch (e) {
+                console.error('KaTeX display error:', e);
+                return match;
+            }
+        });
+        
+        // Inline math: \( ... \)
+        rendered = rendered.replace(/\\\(([\s\S]*?)\\\)/g, (match, latex) => {
+            try {
+                return katex.renderToString(latex.trim(), {
+                    displayMode: false,
+                    throwOnError: false,
+                    output: 'html'
+                });
+            } catch (e) {
+                console.error('KaTeX inline error:', e);
+                return match;
+            }
+        });
+        
+        return rendered;
+    };
+    
+    // ==================== MCQ FORMATTING ====================
+    
+    /**
+     * Check if response is MCQ JSON and format it
+     */
+    const formatMCQIfNeeded = (botresponse, functioncalled) => {
+        // Only format if this is an mcq_widget response
+		const allowedWidgets = [
+			'mcq_widget',
+			'mcq_widget_basic',
+			'mcq_widget_intermediate',
+			'mcq_widget_advanced'
+		];
+
+		if (!allowedWidgets.includes(functioncalled)) {
+			return null;
+		}
+        //if (functioncalled !== 'mcq_widget_advanced') {
+        //    return null;
+        //}
+        
+        try {
+            let mcqData;
+            
+            // Try to parse as JSON
+            if (typeof botresponse === 'string') {
+                mcqData = JSON.parse(botresponse);
+            } else {
+                mcqData = botresponse;
+            }
+            
+            // Validate structure
+            if (!mcqData.questions || !Array.isArray(mcqData.questions)) {
+                return null;
+            }
+            
+            // Build formatted HTML
+            const level = mcqData.metadata?.level || 'Unknown';
+            const questionCount = mcqData.questions.length;
+            
+            let html = '<div class="mcq-history-formatted">';
+            html += `
+                <div class="mcq-history-header">
+                    <strong>📚 ${escapeHtml(level.toUpperCase())} MCQ Practice Set</strong>
+                    <span class="mcq-count-badge">${questionCount} Questions</span>
+                </div>
+            `;
+            
+            // Render each question
+            mcqData.questions.forEach((q, idx) => {
+                html += '<div class="mcq-history-question">';
+                html += `<div class="mcq-q-number">Question ${idx + 1}</div>`;
+                
+                // Render question with LaTeX
+                const renderedQuestion = renderLatexInHTML(q.question);
+                html += `<div class="mcq-q-text">${renderedQuestion}</div>`;
+                
+                html += '<div class="mcq-q-options">';
+                
+                // Render options with LaTeX
+                q.options.forEach((opt, optIdx) => {
+                    const letter = String.fromCharCode(65 + optIdx);
+                    const isCorrect = letter === q.correct;
+                    const correctClass = isCorrect ? 'mcq-correct-option' : '';
+                    const correctMarker = isCorrect ? '<span class="correct-marker">✓</span>' : '';
+                    
+                    // Render option with LaTeX
+                    const renderedOption = renderLatexInHTML(opt);
+                    
+                    html += `
+                        <div class="mcq-q-option ${correctClass}">
+                            <strong>${letter})</strong> ${renderedOption}
+                            ${correctMarker}
+                        </div>
+                    `;
+                });
+                
+                html += '</div>'; // close options
+                
+                // Explanation with LaTeX
+                const renderedExplanation = renderLatexInHTML(q.explanation);
+                html += `
+                    <div class="mcq-q-explanation">
+                        <strong>💡 Explanation:</strong> ${renderedExplanation}
+                    </div>
+                `;
+                
+                html += '</div>'; // close question
+            });
+            
+            // Practice Again button
+            const mcqDataJson = JSON.stringify(mcqData).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+            html += `
+                <button class="mcq-practice-again-btn" 
+                        onclick="reopenMCQPractice(this)"
+                        data-mcq-data='${mcqDataJson}'>
+                    🔄 Practice These Questions Again
+                </button>
+            `;
+            
+            html += '</div>';
+            
+            return html;
+            
+        } catch (e) {
+            console.error('Failed to format MCQ response:', e);
+            return null;
+        }
+    };
+    
+    /**
+     * Reopen MCQ practice from history
+     */
+    window.reopenMCQPractice = function(button) {
+        try {
+            const mcqDataJson = button.getAttribute('data-mcq-data');
+            const mcqData = JSON.parse(mcqDataJson);
+            
+            if (!mcqData.questions || mcqData.questions.length === 0) {
+                alert('No questions found');
+                return;
+            }
+            
+            // Close history modal
+            window.closeHistoryWidget();
+            
+            // Open MCQ widget with this data
+            if (typeof window.openMCQWidgetWithData === 'function') {
+                window.openMCQWidgetWithData(mcqData);
+            } else {
+                console.warn('MCQ widget not available for replay');
+                alert('MCQ practice widget is not available. Please refresh the page.');
+            }
+            
+        } catch (e) {
+            console.error('Failed to reopen MCQ practice:', e);
+            alert('Failed to load MCQ practice');
+        }
+    };
+    
+    // ==================== RENDERING UTILITIES ====================
+    
+    const markdown = window.markdownit ? window.markdownit({
+        html: true,
+        breaks: true
+    }) : null;
+    
+    // ==================== CASCADING DROPDOWNS ====================
+    
+    // Populate subjects with General option first
+    const populateSubjects = () => {
+        if (!syllabusData || !Array.isArray(syllabusData)) {
+            console.error('❌ Invalid syllabus data');
+            subjectSelect.innerHTML = '<option value="">No subjects available</option>';
+            return;
+        }
+        
+        console.log('📚 Populating subjects:', syllabusData.length);
+        subjectSelect.innerHTML = '<option value="">-- Select Subject --</option>';
+        
+        // ✅ ADD GENERAL CATEGORY FIRST
+        const generalOption = document.createElement('option');
+        generalOption.value = 'general';
+        generalOption.textContent = '📝 General (Unfiltered Conversations)';
+        subjectSelect.appendChild(generalOption);
+        
+        // Add visual separator
+        const separator = document.createElement('option');
+        separator.disabled = true;
+        separator.textContent = '────────────────────';
+        subjectSelect.appendChild(separator);
+        
+        // Add syllabus subjects
+        syllabusData.forEach(subject => {
+            const option = document.createElement('option');
+            option.value = subject.subject_key;
+            option.textContent = subject.subject;
+            subjectSelect.appendChild(option);
+        });
+    };
+    
+    // Subject change handler
+    subjectSelect.addEventListener('change', () => {
+        const selectedSubjectKey = subjectSelect.value;
+        
+        // Reset topic and lesson
+        topicSelect.innerHTML = '<option value="">-- Select Topic --</option>';
+        lessonSelect.innerHTML = '<option value="">-- Select Lesson --</option>';
+        topicSelect.disabled = true;
+        lessonSelect.disabled = true;
+        loadButton.disabled = true;
+        
+        if (!selectedSubjectKey) return;
+        
+        // ✅ HANDLE GENERAL CATEGORY
+        if (selectedSubjectKey === 'general') {
+            console.log('📝 General category selected - enabling direct load');
+            topicSelect.innerHTML = '<option value="">Not applicable</option>';
+            lessonSelect.innerHTML = '<option value="">Not applicable</option>';
+            topicSelect.disabled = true;
+            lessonSelect.disabled = true;
+            loadButton.disabled = false;
+            return;
+        }
+        
+		// ✅ For syllabus subjects: enable Subject-only history immediately.
+		loadButton.disabled = false;
+		
+        // Find subject data for syllabus subjects
+        const subjectData = syllabusData.find(s => s.subject_key === selectedSubjectKey);
+        
+        if (subjectData && subjectData.topics && Array.isArray(subjectData.topics)) {
+            console.log('📋 Populating topics:', subjectData.topics.length);
+
+			// ✅ Allow "Subject only" by providing an "All topics" option (empty value).
+			const allTopicsOption = document.createElement('option');
+			allTopicsOption.value = '';
+			allTopicsOption.textContent = 'All topics';
+			topicSelect.appendChild(allTopicsOption);
+            
+            subjectData.topics.forEach(topic => {
+                const option = document.createElement('option');
+                option.value = topic.topic_key;
+                option.textContent = topic.topic;
+                topicSelect.appendChild(option);
+            });
+            
+            topicSelect.disabled = false;
+        }
+    });
+    
+    // Topic change handler
+    topicSelect.addEventListener('change', () => {
+        const selectedSubjectKey = subjectSelect.value;
+        const selectedTopicKey = topicSelect.value;
+        
+        // Reset lesson
+        lessonSelect.innerHTML = '<option value="">-- Select Lesson --</option>';
+        lessonSelect.disabled = true;
+        loadButton.disabled = false;
+        
+        if (!selectedTopicKey) return;
+
+		// ✅ "All topics" selected (subject-only filter).
+		if (!selectedTopicKey) {
+			lessonSelect.innerHTML = '<option value="">All lessons</option>';
+			lessonSelect.disabled = true;
+			return;
+		}		
+        
+        // Find subject and topic data
+        const subjectData = syllabusData.find(s => s.subject_key === selectedSubjectKey);
+        const topicData = subjectData ? subjectData.topics.find(t => t.topic_key === selectedTopicKey) : null;
+        
+        if (topicData && topicData.lessons && Array.isArray(topicData.lessons)) {
+            console.log('📖 Populating lessons:', topicData.lessons.length);
+
+			// ✅ Allow "Subject > Topic" by providing an "All lessons" option (empty value).
+			const allLessonsOption = document.createElement('option');
+			allLessonsOption.value = '';
+			allLessonsOption.textContent = 'All lessons';
+			lessonSelect.appendChild(allLessonsOption);
+
+            
+            topicData.lessons.forEach(lesson => {
+                const option = document.createElement('option');
+                
+                // Handle both string and object lessons
+                if (typeof lesson === 'string') {
+                    option.value = lesson;
+                    option.textContent = lesson;
+                } else if (lesson.lesson) {
+                    option.value = lesson.lesson;
+                    option.textContent = lesson.lesson;
+                }
+                
+                lessonSelect.appendChild(option);
+            });
+            
+            lessonSelect.disabled = false;
+        }
+    });
+    
+    // Lesson change handler
+    lessonSelect.addEventListener('change', () => {
+		// ✅ Lesson is optional now ("All lessons" is valid), so keep enabled as long as subject is selected.
+		loadButton.disabled = !subjectSelect.value;
+    });
+    
+    // ==================== FETCH HISTORY ====================
+    
+    const fetchHistory = async (subjectKey, topicKey, lesson) => {
+        historyBody.innerHTML = '<div class="loading">⏳ Loading conversations...</div>';
+        
+        try {
+            // Build payload
+            const payload = {
+                sesskey: sesskey,
+                courseid: courseid,
+                page: currentPage,
+                perpage: 20
+            };
+            
+            // For general category, explicitly request empty filters
+            if (subjectKey === 'general') {
+                payload.subject = '';
+                payload.topic = '';
+                payload.lesson = '';
+                payload.general = true;
+                console.log('📝 Fetching general (unfiltered) conversations');
+            } else {
+                payload.subject = subjectKey;
+                payload.topic = topicKey;
+                payload.lesson = lesson;
+            }
+            
+            const response = await fetch(historyAjaxUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            if (data.status === 'error') {
+                throw new Error(data.message || 'Failed to fetch history');
+            }
+            
+            if (data.conversations && data.conversations.length > 0) {
+                console.log('✅ Loaded', data.conversations.length, 'conversations');
+                renderHistoryAccordion(data.conversations);
+            } else {
+                historyBody.innerHTML = '<div class="empty-state"><p>📭 No conversations found.</p></div>';
+            }
+        } catch (error) {
+            console.error('❌ Failed to fetch history:', error);
+            historyBody.innerHTML = '<div class="error">❌ Failed to load history. Please try again.</div>';
+        }
+    };
+    
+    // ==================== RENDER ACCORDION ====================
+    
+    const renderHistoryAccordion = (conversations) => {
+        historyBody.innerHTML = '';
+        
+        conversations.forEach((conv, index) => {
+            const accordionItem = document.createElement('div');
+            accordionItem.className = 'accordion-item';
+            
+            // Truncate user text for header
+            const truncatedText = conv.usertext.length > 80 
+                ? conv.usertext.substring(0, 80) + '...'
+                : conv.usertext;
+            
+            // Show subject/topic/lesson if available
+            let contextInfo = '';
+            if (conv.subject || conv.topic || conv.lesson) {
+                const parts = [];
+                if (conv.subject && conv.subject !== 'general') parts.push(conv.subject);
+                if (conv.topic) parts.push(conv.topic);
+                if (conv.lesson) parts.push(conv.lesson);
+                if (parts.length > 0) {
+                    contextInfo = `<div style="font-size: 0.85rem; color: #6c757d; margin-top: 4px;">📂 ${parts.join(' → ')}</div>`;
+                }
+            }
+            
+            accordionItem.innerHTML = `
+                <div class="accordion-header" data-index="${index}">
+                    <div style="flex: 1;">
+                        <strong>${conv.formattedtime}:</strong> ${truncatedText}
+                        ${contextInfo}
+                    </div>
+                    <span style="color: #6c757d; font-size: 1.2rem;">▼</span>
+                </div>
+                <div class="accordion-content" style="display: none;">
+                    <div class="message user-message">
+                        <div class="avatar">U</div>
+                        <div class="content">${conv.usertext}</div>
+                    </div>
+                    <div class="message bot-message">
+                        <div class="avatar">A</div>
+                        <div class="content" 
+                             data-rendered="false" 
+                             data-function="${conv.functioncalled || ''}">${conv.botresponse}</div>
+                    </div>
+                </div>
+            `;
+            
+            // Lazy render on expand
+            const header = accordionItem.querySelector('.accordion-header');
+            const content = accordionItem.querySelector('.accordion-content');
+            const botContent = accordionItem.querySelector('.bot-message .content');
+            const arrow = header.querySelector('span');
+            
+            header.addEventListener('click', () => {
+                const isVisible = content.style.display === 'block';
+                
+                // Toggle visibility
+                content.style.display = isVisible ? 'none' : 'block';
+                arrow.textContent = isVisible ? '▼' : '▲';
+                
+                // Render on first expand
+                if (!isVisible && botContent.dataset.rendered === 'false') {
+                    const functionCalled = botContent.dataset.function;
+                    const rawResponse = botContent.textContent;
+                    
+                    // Check if this is an MCQ response
+                    const mcqFormatted = formatMCQIfNeeded(rawResponse, functionCalled);
+                    
+                    if (mcqFormatted) {
+                        // Display formatted MCQ
+                        botContent.innerHTML = mcqFormatted;
+                    } else {
+                        // Regular LaTeX/Markdown rendering
+                        const { text, placeholders } = renderLatex(rawResponse);
+                        let rendered = markdown ? markdown.render(text) : text;
+                        
+                        placeholders.forEach((html, placeholder) => {
+                            const escapedPlaceholder = placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                            rendered = rendered.replace(new RegExp(escapedPlaceholder, 'g'), html);
+                        });
+                        
+                        botContent.innerHTML = rendered;
+                    }
+                    
+                    botContent.dataset.rendered = 'true';
+                }
+            });
+            
+            historyBody.appendChild(accordionItem);
+        });
+    };
+    
+    // ==================== LOAD BUTTON HANDLER ====================
+    
+    loadButton.addEventListener('click', () => {
+        const subjectKey = subjectSelect.value;
+        const topicKey = topicSelect.value;
+        const lesson = lessonSelect.value;
+        
+		if (!subjectKey) {
+			alert('Please select a subject');
+			return;
+		}
+
+		// Allow general category without topic/lesson
+		if (subjectKey === 'general') {
+			console.log('🔍 Fetching general (unfiltered) conversations');
+			fetchHistory('general', '', '');
+			return;
+		}
+
+		// ✅ Subject only
+		if (!topicKey) {
+			console.log('🔍 Fetching history for subject only:', { subjectKey });
+			fetchHistory(subjectKey, '', '');
+			return;
+		}
+
+		// ✅ Subject > Topic (all lessons)
+		if (!lesson) {
+			console.log('🔍 Fetching history for subject+topic (all lessons):', { subjectKey, topicKey });
+			fetchHistory(subjectKey, topicKey, '');
+			return;
+		}
+
+		// ✅ Subject > Topic > Lesson
+		console.log('🔍 Fetching history for:', { subjectKey, topicKey, lesson });
+		fetchHistory(subjectKey, topicKey, lesson);
+    });
+    
+    // ==================== MODAL CONTROLS ====================
+    
+    window.openHistoryWidget = function() {
+        console.log('📜 Opening History Widget...');
+        modal.style.display = 'flex';
+        
+        // Load syllabus if not already loaded
+        if (!syllabusData) {
+            loadSyllabus();
+        }
+    };
+    
+    window.closeHistoryWidget = function() {
+        console.log('❌ Closing History Widget...');
+        modal.style.display = 'none';
+        historyBody.innerHTML = '<div class="empty-state"><p>📚 Select a category above to view your conversation history</p></div>';
+        pagination.style.display = 'none';
+    };
+    
+    const loadSyllabus = async () => {
+        // Try to get syllabus from main widget first
+        if (window.aiAssistantState && window.aiAssistantState.syllabusData) {
+            console.log('✅ Using syllabus from main widget');
+            syllabusData = window.aiAssistantState.syllabusData;
+            populateSubjects();
+            return;
+        }
+        
+        console.log('⏳ Waiting for syllabus to load...');
+        subjectSelect.innerHTML = '<option value="">Loading subjects...</option>';
+    };
+    
+    // Listen for syllabus loaded event from main widget
+    document.addEventListener('syllabusLoaded', (e) => {
+        console.log('📥 Received syllabus data from main widget');
+        syllabusData = e.detail.syllabusData;
+        populateSubjects();
+    });
+    
+    // ==================== EVENT HANDLERS ====================
+    
+    closeButton.addEventListener('click', window.closeHistoryWidget);
+    
+    // Close on overlay click
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            window.closeHistoryWidget();
+        }
+    });
+    
+    // Close on Escape key
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && modal.style.display === 'flex') {
+            window.closeHistoryWidget();
+        }
+    });
+    
+    console.log('✅ History Widget initialized with MCQ formatting and LaTeX support');
+    window.aiAssistantHistoryWidgetInitialized = true;
+    
+})();
+</script>

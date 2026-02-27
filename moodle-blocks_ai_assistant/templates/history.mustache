@@ -1,0 +1,311 @@
+{{!
+  FILE: moodle/blocks/ai_assistant/templates/history.mustache
+  MODIFIED: Changed filter hierarchy from Subject->Lesson->Topic to Subject->Topic->Lesson
+  FIXED: Smart lesson handling for string arrays and object arrays
+}}
+
+<!-- Dependencies -->
+<script src="https://cdn.jsdelivr.net/npm/markdown-it@12.3.2/dist/markdown-it.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.15.1/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.15.1/dist/katex.min.js" crossorigin="anonymous"></script>
+
+<div class="ai-assistant-history-container">
+    <h2>{{#str}}history_page_title, block_ai_assistant{{/str}}</h2>
+
+    <!-- START: Filter Controls (Three-Level Hierarchy: Subject -> Topic -> Lesson) -->
+    <form method="GET" class="mb-4 p-3 border rounded bg-light">
+        <input type="hidden" name="courseid" value="{{courseid}}">
+        <div class="row g-3 align-items-end">
+            <div class="col-md-3">
+                <label for="filter-subject" class="form-label">{{#str}}subject, block_ai_assistant{{/str}}</label>
+                <select id="filter-subject" name="subject" class="form-select">
+                    <option value="">{{#str}}all_subjects, block_ai_assistant{{/str}}</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label for="filter-topic" class="form-label">{{#str}}topic, block_ai_assistant{{/str}}</label>
+                <select id="filter-topic" name="topic" class="form-select" disabled>
+                    <option value="">{{#str}}all_topics, block_ai_assistant{{/str}}</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label for="filter-lesson" class="form-label">{{#str}}lesson, block_ai_assistant{{/str}}</label>
+                <select id="filter-lesson" name="lesson" class="form-select" disabled>
+                    <option value="">{{#str}}all_lessons, block_ai_assistant{{/str}}</option>
+                </select>
+            </div>
+            <div class="col-md-auto">
+                <button type="submit" class="btn btn-primary">{{#str}}filter, block_ai_assistant{{/str}}</button>
+                <a href="{{historyurl}}" class="btn btn-secondary">{{#str}}clear, block_ai_assistant{{/str}}</a>
+            </div>
+        </div>
+    </form>
+    <!-- END: Filter Controls -->
+
+    {{#has_history}}
+        <!-- Accordion display: Subject -> Topic -> Lesson -> Conversations -->
+        {{#subjects}}
+            <div class="subject-group mt-4">
+                <h3>{{name}}</h3>
+                {{#topics}}
+                    <div class="topic-group ms-3 mt-3">
+                        <h4>{{name}}</h4>
+                        {{#lessons}}
+                            <div class="lesson-group ms-3 mt-2">
+                                <h5>{{name}}</h5>
+                                <div class="accordion" id="accordion-lesson-{{uniqid}}">
+                                    {{#conversations}}
+                                        <div class="accordion-item">
+                                            <h2 class="accordion-header" id="heading-{{id}}">
+                                                <button class="accordion-button collapsed" type="button" 
+                                                        data-bs-toggle="collapse" data-bs-target="#collapse-{{id}}" 
+                                                        aria-expanded="false" aria-controls="collapse-{{id}}">
+                                                    <strong>{{formattedtime}}:</strong>&nbsp;
+                                                    <span class="user-question-preview">{{usertext}}</span>
+                                                </button>
+                                            </h2>
+                                            <div id="collapse-{{id}}" class="accordion-collapse collapse" 
+                                                 aria-labelledby="heading-{{id}}" data-bs-parent="#accordion-lesson-{{uniqid}}">
+                                                <div class="accordion-body">
+                                                    <div class="ai-assistant-chat-history">
+                                                        <div class="ai-assistant-message from-user">
+                                                            <div class="ai-assistant-avatar">U</div>
+                                                            <div class="ai-assistant-message-content" data-is-rendered="false">
+                                                                {{{usertext}}}
+                                                            </div>
+                                                        </div>
+                                                        <div class="ai-assistant-message from-bot">
+                                                            <div class="ai-assistant-avatar">A</div>
+                                                            <div class="ai-assistant-message-content" data-is-rendered="false">
+                                                                {{{botresponse}}}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    {{/conversations}}
+                                </div>
+                            </div>
+                        {{/lessons}}
+                    </div>
+                {{/topics}}
+            </div>
+        {{/subjects}}
+
+        <!-- Pagination Controls -->
+        {{#pagination.haspages}}
+            <nav aria-label="Page navigation" class="mt-4">
+                <ul class="pagination justify-content-center">
+                    {{#pagination.hasprevious}}
+                        <li class="page-item">
+                            <a class="page-link" href="{{pagination.previouspageurl}}">{{#str}}previous{{/str}}</a>
+                        </li>
+                    {{/pagination.hasprevious}}
+                    {{^pagination.hasprevious}}
+                        <li class="page-item disabled">
+                            <a class="page-link" href="#" tabindex="-1" aria-disabled="true">{{#str}}previous{{/str}}</a>
+                        </li>
+                    {{/pagination.hasprevious}}
+
+                    {{#pagination.pages}}
+                        <li class="page-item {{#isactive}}active{{/isactive}}">
+                            <a class="page-link" href="{{url}}">{{number}}</a>
+                        </li>
+                    {{/pagination.pages}}
+
+                    {{#pagination.hasnext}}
+                        <li class="page-item">
+                            <a class="page-link" href="{{pagination.nextpageurl}}">{{#str}}next{{/str}}</a>
+                        </li>
+                    {{/pagination.hasnext}}
+                    {{^pagination.hasnext}}
+                        <li class="page-item disabled">
+                            <a class="page-link" href="#" tabindex="-1" aria-disabled="true">{{#str}}next{{/str}}</a>
+                        </li>
+                    {{/pagination.hasnext}}
+                </ul>
+            </nav>
+        {{/pagination.haspages}}
+
+    {{/has_history}}
+    {{^has_history}}
+        <div class="alert alert-info mt-4">
+            {{#str}}no_history_for_filter, block_ai_assistant{{/str}}
+        </div>
+    {{/has_history}}
+</div>
+
+<!-- JavaScript for Cascading Filters: Subject > Topic > Lesson -->
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const syllabusData = {{{ syllabusjson }}};
+    const currentFilters = {{{ filtersjson }}};
+    const subjectDropdown = document.getElementById('filter-subject');
+    const topicDropdown = document.getElementById('filter-topic');
+    const lessonDropdown = document.getElementById('filter-lesson');
+
+    // Helper: Find subject for a given topic
+    const findSubjectForTopic = (topicKey) => {
+        if (!topicKey) return null;
+        for (const subject of syllabusData) {
+            if (subject.topics && subject.topics.some(t => t.topic_key === topicKey)) {
+                return subject.subject_key;
+            }
+        }
+        return null;
+    };
+
+    // Populate subjects dropdown
+    const populateSubjects = () => {
+        if (!syllabusData || !subjectDropdown) return;
+        
+        const preselectedSubject = findSubjectForTopic(currentFilters.topic) || currentFilters.subject;
+        
+        syllabusData.forEach(subject => {
+            const option = document.createElement('option');
+            option.value = subject.subject_key;
+            option.textContent = subject.subject;
+            if (subject.subject_key === preselectedSubject) {
+                option.selected = true;
+            }
+            subjectDropdown.appendChild(option);
+        });
+        
+        if (subjectDropdown.value) {
+            subjectDropdown.dispatchEvent(new Event('change'));
+        }
+    };
+
+    // Populate topics dropdown based on selected subject
+    const populateTopics = (selectedSubjectKey) => {
+        topicDropdown.innerHTML = '<option value="">{{#str}}all_topics, block_ai_assistant{{/str}}</option>';
+        lessonDropdown.innerHTML = '<option value="">{{#str}}all_lessons, block_ai_assistant{{/str}}</option>';
+        topicDropdown.disabled = true;
+        lessonDropdown.disabled = true;
+
+        if (!selectedSubjectKey) return;
+
+        const subjectData = syllabusData.find(s => s.subject_key === selectedSubjectKey);
+        if (!subjectData || !subjectData.topics) return;
+
+        subjectData.topics.forEach(topic => {
+            const option = document.createElement('option');
+            option.value = topic.topic_key;
+            option.textContent = topic.topic;
+            if (topic.topic_key === currentFilters.topic) {
+                option.selected = true;
+            }
+            topicDropdown.appendChild(option);
+        });
+        
+        topicDropdown.disabled = false;
+        
+        if (topicDropdown.value) {
+            topicDropdown.dispatchEvent(new Event('change'));
+        }
+    };
+
+    // ✅ FIXED: Smart lesson handler - supports both string and object arrays
+    const populateLessons = (selectedSubjectKey, selectedTopicKey) => {
+        lessonDropdown.innerHTML = '<option value="">{{#str}}all_lessons, block_ai_assistant{{/str}}</option>';
+        lessonDropdown.disabled = true;
+
+        if (!selectedSubjectKey || !selectedTopicKey) return;
+
+        const subjectData = syllabusData.find(s => s.subject_key === selectedSubjectKey);
+        if (!subjectData) return;
+
+        const topicData = subjectData.topics.find(t => t.topic_key === selectedTopicKey);
+        if (!topicData || !topicData.lessons || topicData.lessons.length === 0) return;
+
+        console.log('🔍 Found', topicData.lessons.length, 'lessons for topic', selectedTopicKey);
+
+        topicData.lessons.forEach((lesson, index) => {
+            const option = document.createElement('option');
+            
+            // Smart handling: Check if lesson is object or string
+            if (typeof lesson === 'string') {
+                // Lesson is just a string - use it as both value and display
+                option.value = lesson;
+                option.textContent = lesson;
+                if (lesson === currentFilters.lesson) {
+                    option.selected = true;
+                }
+                console.log(`  ${index + 1}. ${lesson} (string)`);
+            } else {
+                // Lesson is an object with lesson_key and lesson properties
+                option.value = lesson.lesson_key;
+                option.textContent = lesson.lesson;
+                if (lesson.lesson_key === currentFilters.lesson) {
+                    option.selected = true;
+                }
+                console.log(`  ${index + 1}. ${lesson.lesson} [${lesson.lesson_key}] (object)`);
+            }
+            
+            lessonDropdown.appendChild(option);
+        });
+        
+        lessonDropdown.disabled = false;
+        console.log('✅ Lesson dropdown populated and enabled');
+    };
+
+    // Event listeners for cascading dropdowns
+    subjectDropdown.addEventListener('change', () => {
+        populateTopics(subjectDropdown.value);
+    });
+
+    topicDropdown.addEventListener('change', () => {
+        populateLessons(subjectDropdown.value, topicDropdown.value);
+    });
+
+    // Initialize dropdowns
+    populateSubjects();
+
+    // ===== SIMPLE: Render LaTeX BEFORE Markdown (no placeholders) =====
+    const md = window.markdownit({
+        html: true,
+        linkify: true,
+        typographer: true
+    });
+
+    // Helper function to render LaTeX in text
+    const renderLatex = (text) => {
+        // Replace display math \[...\]
+        text = text.replace(/\\\[([\s\S]*?)\\\]/g, function(match, latex) {
+            try {
+                return katex.renderToString(latex.trim(), { displayMode: true, throwOnError: false });
+            } catch (e) {
+                console.error('KaTeX display error:', e);
+                return match;
+            }
+        });
+        
+        // Replace inline math \(...\)
+        text = text.replace(/\\\(([\s\S]*?)\\\)/g, function(match, latex) {
+            try {
+                return katex.renderToString(latex.trim(), { displayMode: false, throwOnError: false });
+            } catch (e) {
+                console.error('KaTeX inline error:', e);
+                return match;
+            }
+        });
+        
+        return text;
+    };
+
+    // Process all unrendered content
+    document.querySelectorAll('.ai-assistant-message-content[data-is-rendered="false"]').forEach(function(element) {
+        const rawContent = element.innerHTML.trim();
+        
+        // STEP 1: Render LaTeX FIRST (before Markdown)
+        const latexRendered = renderLatex(rawContent);
+        
+        // STEP 2: Now process Markdown
+        const finalHtml = md.render(latexRendered);
+        
+        element.innerHTML = finalHtml;
+        element.setAttribute('data-is-rendered', 'true');
+    });
+});
+</script>

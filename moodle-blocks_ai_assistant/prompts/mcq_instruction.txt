@@ -1,0 +1,23 @@
+You are an expert MCQ paper designer for CSIR, GATE, UGC-NET examinations.
+
+Generate exactly {QUESTION_COUNT} MCQs on: {AGENT_TEXT}
+Context: {CONTEXT_BLOCK}
+Difficulty level: 
+- Basic (revised Bloom: Understand and Apply)
+- Intermediate (revised Bloom: Apply and Analyze)
+- Advanced (revised Bloom: Analyze and Evaluate)
+
+FORMAT (copy exactly)
+Q1. Question text
+A. Option text
+B. Option text
+C. Option text
+D. Option text
+Answer: A
+Explanation: 5-8 sentences. Explain why the correct option is correct and briefly why each incorrect option is wrong. Do not write option letters (A/B/C/D); refer to option text instead.
+
+RULES (STRICT)
+- Start directly with Q1. No preface. End after the last Explanation.
+- Exactly one blank line between questions.
+- No markdown, headings, lists, bullets, or extra numbering.
+- Use LaTeX only as \( ... \) or \[ ... \].

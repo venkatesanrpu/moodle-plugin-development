@@ -1,0 +1,1085 @@
+{{!
+  Block AI Assistant - Main Template
+  Handles user interaction, history lookup cache check, SSE streaming, response rendering.
+  
+  Key flow:
+  1. User clicks send
+  2. sendMessage() called (now async)
+  3. lookupHistory() queries DB for existing response
+  4. If hit: render cached response + "Fetched from history" notice, return (no API call, no DB insert)
+  5. If miss: create history row, start SSE stream, update row when complete
+}}
+
+
+<!-- Dependencies -->
+<!-- Removed markdown-it -->
+<script src="https://cdn.jsdelivr.net/npm/markdown-it@12.3.2/dist/markdown-it.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/lib/marked.umd.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.25/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.25/dist/katex.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.25/dist/contrib/auto-render.min.js" crossorigin="anonymous"></script>
+
+<!-- HTML Structure -->
+<div class="ai-assistant-container">
+  <!-- Shared overlay -->
+  <div id="ai-assistant-overlay"></div>
+
+  <!-- Main Chat Widget -->
+  <div id="ai-assistant-widget-container" class="ai-assistant-widget-window">
+    <div class="ai-assistant-widget-header">
+      <span id="ai-assistant-widget-title">AI CATALYST</span>
+      <div class="controls">
+        <button
+          id="ai-assistant-guided-search-button"
+          class="ai-assistant-widget-control-button"
+          aria-label="Guided Search"
+          data-bs-toggle="tooltip"
+          data-bs-placement="bottom"
+          title="Guided Search"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+            <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.1zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z" />
+            <path d="M3.5 8.5a.5.5 0 0 1 .5-.5h4a.5.5 0 0 1 0 1h-4a.5.5 0 0 1-.5-.5z" />
+          </svg>
+        </button>
+
+        <button
+          id="ai-assistant-history-button"
+          class="ai-assistant-widget-control-button"
+          aria-label="View History"
+          data-bs-toggle="tooltip"
+          data-bs-placement="bottom"
+          title="View History"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+            <path d="M8.515 1.019A7 7 0 0 0 8 1V0a8 8 0 0 1 .589.022l-.074.997zm2.004.45a7.003 7.003 0 0 0-.985-.299l.219-.976c.383.086.76.2 1.126.342l-.36.933zm1.37.71a7.01 7.01 0 0 0-.439-.27l.493-.87a8.025 8.0 0 0 1 .979.654l-.615.789a6.996 6.996 0 0 0-.418-.302zm1.834 1.79a6.99 6.99 0 0 0-.653-.796l.724-.69c.27.285.52.59.747.91l-.818.576zm.744 1.352a7.08 7.08 0 0 0-.214-.468l.893-.45a7.976 7.976 0 0 1 .45 1.088l-.95.313a7.023 7.023 0 0 0-.179-.483zm.53 2.507a6.991 6.991 0 0 0-.1-1.025l.985-.17c.067.386.106.778.116 1.17l-1 .025zm-.131 1.538c.033-.17.06-.339.081-.51l.993.123a7.957 7.957 0 0 1-.23 1.155l-.964-.267c.046-.165.086-.332.12-.501zm-.952 2.379c.184-.29.346-.594.486-.908l.914.405c-.16.36-.345.706-.555 1.038l-.845-.535zm-.964 1.205c.122-.122.239-.248.35-.378l.758.653a8.073 8.073 0 0 1-.401.432l-.707-.707z"/>
+            <path d="M8 1a7 7 0 1 0 4.95 11.95l.707.707A8.001 8.001 0 1 1 8 0v1z"/>
+            <path d="M7.5 3a.5.5 0 0 1 .5.5v5.21l3.248 1.856a.5.5 0 0 1-.496.868l-3.5-2A.5.5 0 0 1 7 9V3.5a.5.5 0 0 1 .5-.5z"/>
+          </svg>
+        </button>
+
+        <button
+          id="ai-assistant-fullscreen-button"
+          class="ai-assistant-widget-control-button"
+          aria-label="Toggle fullscreen"
+          data-bs-toggle="tooltip"
+          data-bs-placement="bottom"
+          title="Toggle fullscreen"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+            <path d="M1.5 1a.5.5 0 0 0-.5.5v4a.5.5 0 0 1-1 0v-4A1.5 1.5 0 0 1 1.5 0h4a.5.5 0 0 1 0 1h-4zM10 .5a.5.5 0 0 1 .5-.5h4A1.5 1.5 0 0 1 16 1.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 0-.5-.5h-4a.5.5 0 0 1-.5-.5zM.5 10a.5.5 0 0 1 .5.5v4a.5.5 0 0 0 .5.5h4a.5.5 0 0 1 0 1h-4A1.5 1.5 0 0 1 0 14.5v-4a.5.5 0 0 1 .5-.5zm15 0a.5.5 0 0 1 .5.5v4a1.5 1.5 0 0 1-1.5 1.5h-4a.5.5 0 0 1 0-1h4a.5.5 0 0 0 .5-.5v-4a.5.5 0 0 1 .5-.5z" />
+          </svg>
+        </button>
+
+        <button
+          id="ai-assistant-close-button"
+          class="ai-assistant-widget-control-button"
+          aria-label="Close chat"
+          data-bs-toggle="tooltip"
+          data-bs-placement="bottom"
+          title="Close chat"
+        >&times;</button>
+      </div>
+    </div>
+
+    <div id="ai-assistant-chat-body" class="ai-assistant-chat-body"></div>
+
+    <div class="ai-assistant-input-area">
+      <textarea id="ai-assistant-input" placeholder="Type a message..." aria-label="Chat input" rows="1"></textarea>
+      <button id="ai-assistant-send-button" class="ai-assistant-send-button" aria-label="Send message">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="22" y1="2" x2="11" y2="13"></line>
+          <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Floating Action Button -->
+  <button id="ai-assistant-trigger-button" class="ai-assistant-widget-button" aria-label="Open AI Assistant">
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m3 21 1.9-5.7a8.5 8.5 0 1 1 3.8 3.8z"></path>
+    </svg>
+  </button>
+
+  <!-- Guided Search Modal -->
+  <div id="ai-assistant-modal-container" class="ai-assistant-modal-container">
+    <form id="ai-assistant-modal-form" class="ai-assistant-modal-form">
+      <h3>Guided Search</h3>
+      <p>Select a subject, topic, and lesson to get a more accurate answer.</p>
+      <div class="form-group">
+        <label for="ai-assistant-modal-subject">Subject</label>
+        <select id="ai-assistant-modal-subject" name="subject" required>
+          <option value="">-- Please select a subject --</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="ai-assistant-modal-topic">Topic</label>
+        <select id="ai-assistant-modal-topic" name="topic" required disabled>
+          <option value="">-- Please select a topic --</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="ai-assistant-modal-lesson">Lesson</label>
+        <select id="ai-assistant-modal-lesson" name="lesson" required disabled>
+          <option value="">-- Please select a lesson --</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="ai-assistant-modal-question">Your Question</label>
+        <textarea id="ai-assistant-modal-question" name="question" rows="4" required placeholder="e.g., Explain the structural features of..."></textarea>
+      </div>
+      <div class="form-actions">
+        <button type="button" id="ai-assistant-modal-cancel" class="ai-assistant-button-secondary">Cancel</button>
+        <button type="submit" id="ai-assistant-modal-submit" class="ai-assistant-button-primary">Ask AI</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- History Widget Modal -->
+  {{> block_ai_assistant/history_widget }}
+  <!-- MCQ Widget Modal -->
+  {{> block_ai_assistant/mcq_widget }}
+
+</div>
+
+<script>
+  // Guard clause - prevent multiple initializations
+  if (!window.aiAssistantInitialized) {
+    (function() {
+      'use strict';
+
+      // ==================== CONFIGURATION ====================
+      const agentConfigKey = '{{agentkey}}';
+      const mainSubjectKey = '{{mainsubjectkey}}';
+      const blockInstanceId = {{blockinstanceid}};
+      const sesskey = '{{sesskey}}';
+      const courseid = Number('{{courseid}}');
+      const historyAjaxUrl = '{{historyajaxurl}}';
+      const syllabusAjaxUrl = '{{syllabusajaxurl}}';
+      const askAgentAjaxUrl = '{{askagentajaxurl}}';
+	  const demoAgentAjaxUrl = '{{demoagentajaxurl}}';
+      const mcqAjaxUrl = '{{mcqajaxurl}}';
+      const webSearchAjaxUrl = '{{websearchajaxurl}}';
+      const youtubeSummarizeAjaxUrl = '{{youtubesummarizeajaxurl}}';
+      const pageSubject = '{{pagesubject}}';
+      const pageTopic = '{{pagetopic}}';
+
+      // Function URL mapping
+      const functionUrls = {
+        ask_agent: askAgentAjaxUrl,
+		demo_agent: demoAgentAjaxUrl,
+        mcq: mcqAjaxUrl,
+        websearch: webSearchAjaxUrl,
+        youtube_summarize: youtubeSummarizeAjaxUrl
+      };
+
+      // ==================== DOM ELEMENTS ====================
+      const triggerButton = document.getElementById('ai-assistant-trigger-button');
+      const closeButton = document.getElementById('ai-assistant-close-button');
+      const fullscreenButton = document.getElementById('ai-assistant-fullscreen-button');
+      const guidedSearchButton = document.getElementById('ai-assistant-guided-search-button');
+      const widgetContainer = document.getElementById('ai-assistant-widget-container');
+      const chatBody = document.getElementById('ai-assistant-chat-body');
+      const chatInput = document.getElementById('ai-assistant-input');
+      const sendButton = document.getElementById('ai-assistant-send-button');
+      const overlay = document.getElementById('ai-assistant-overlay');
+      const modalContainer = document.getElementById('ai-assistant-modal-container');
+      const modalForm = document.getElementById('ai-assistant-modal-form');
+      const modalSubject = document.getElementById('ai-assistant-modal-subject');
+      const modalTopic = document.getElementById('ai-assistant-modal-topic');
+      const modalLesson = document.getElementById('ai-assistant-modal-lesson');
+      const modalQuestion = document.getElementById('ai-assistant-modal-question');
+      const modalCancel = document.getElementById('ai-assistant-modal-cancel');
+
+      // ==================== STATE MANAGEMENT ====================
+      if (!window.aiAssistantState) {
+        window.aiAssistantState = {
+          isChatVisible: false,
+          isFullscreen: false,
+          isModalVisible: false,
+          messageHistory: [],
+          nextMessageContext: {
+            subject: '',
+            topic: pageTopic,
+            lesson: ''
+          },
+          syllabusData: null
+        };
+      }
+      const agentState = window.aiAssistantState;
+
+      // ==================== RENDERING UTILITIES ====================
+      // Plain text rendering only (no markdown). This avoids heavy re-rendering per chunk. [file:227]
+      const renderMessage = (text, from) => {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `ai-assistant-message from-${from}`;
+
+        const avatar = document.createElement('div');
+        avatar.className = 'ai-assistant-avatar';
+        avatar.textContent = from === 'user' ? 'U' : 'A';
+
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'ai-assistant-message-content';
+        contentDiv.textContent = String(text ?? '');
+
+        messageDiv.appendChild(avatar);
+        messageDiv.appendChild(contentDiv);
+        chatBody.appendChild(messageDiv);
+        chatBody.scrollTop = chatBody.scrollHeight;
+		return contentDiv; // ADD THIS
+      };
+/*	  // Render final bot response with HTML support (markdown, links, etc.)
+  const renderBotResponseFinal = (container, html) => {
+    if (!container) return;
+    container.innerHTML = '';
+    container.innerHTML = String(html ?? '');
+  };
+**/
+      const repaintHistory = () => {
+        chatBody.innerHTML = '';
+        agentState.messageHistory.forEach(msg => {
+          renderMessage(msg.usertext, 'user');
+          if (msg.botresponse) {
+  const botContentDiv = renderMessage('', 'bot');
+  renderBotResponseFinal(botContentDiv, msg.botresponse);
+}
+
+        });
+      };
+
+      const showTypingIndicator = () => {
+        if (document.getElementById('ai-assistant-typing-indicator')) return;
+        const indicator = document.createElement('div');
+        indicator.id = 'ai-assistant-typing-indicator';
+        indicator.className = 'ai-assistant-message from-bot';
+        indicator.innerHTML = '<div class="ai-assistant-avatar">A</div><div class="ai-assistant-typing-indicator"><span></span><span></span><span></span></div>';
+        chatBody.appendChild(indicator);
+        chatBody.scrollTop = chatBody.scrollHeight;
+      };
+
+      const hideTypingIndicator = () => {
+        const indicator = document.getElementById('ai-assistant-typing-indicator');
+        if (indicator) indicator.remove();
+      };
+	  
+	    // ==================== HISTORY LOOKUP (CACHE CHECK) =======================
+  // Query DB for existing cached response (no API call if found).
+  // Returns {hit: true, botresponse, notice} on cache hit, or null on cache miss.
+  const lookupHistory = async (historyEntry) => {
+    try {
+      const payload = {
+        action: 'lookup',
+        sesskey: sesskey,
+        courseid: courseid,
+        history: {
+          usertext: historyEntry.usertext,
+        },
+      };
+
+      const res = await fetch(historyAjaxUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+
+      // Check response status
+      if (data && data.status === 'success') {
+        if (data.hit === true) {
+          // Cache hit: return the cached response.
+          return {
+            hit: true,
+            historyid: data.historyid,
+            botresponse: data.botresponse,
+            notice: data.notice || 'Fetched from cache store',
+          };
+        } else {
+          // Cache miss: no matching response found.
+          return { hit: false };
+        }
+      } else {
+        // Unexpected response format.
+        console.warn('Unexpected lookup response:', data);
+        return { hit: false };
+      }
+    } catch (err) {
+      // Network error or JSON parse error. Treat as cache miss and continue.
+      console.warn('History lookup failed:', err);
+      return { hit: false };
+    }
+  };
+
+      // KaTeX auto-render once at the end of streaming. [web:205]
+      const renderKatexOnce = (containerEl) => {
+        if (typeof window.renderMathInElement !== 'function') return;
+        window.renderMathInElement(containerEl, {
+          delimiters: [
+            { left: "$$", right: "$$", display: true },
+            { left: "$", right: "$", display: false },
+            { left: "\\(", right: "\\)", display: false },
+            { left: "\\[", right: "\\]", display: true }
+          ],
+          throwOnError: false
+        });
+      };
+//============
+// === POST PROCESS HELPERS (declare once, reused by finalize + repaint) ===
+const allowlistHtml = (input) => {
+  let s = String(input || '')
+    .replace(/<\s*\/?\s*(script|style)[^>]*>/gi, '')
+    .replace(/\son\w+="[^"]*"/gi, '')
+    .replace(/\son\w+='[^']*'/gi, '');
+
+  const allowed = /^(h1|h2|h3|h4|p|br|ul|ol|li|strong|em|code|pre|blockquote)$/i;
+
+  s = s.replace(/<\/?([a-z0-9]+)(\s[^>]*)?>/gi, (m, tag) => {
+    if (!allowed.test(tag)) return '';
+    return m.startsWith('</') ? `</${tag}>` : `<${tag}>`;
+  });
+
+  return s;
+};
+
+const protectMathDelimiters = (s) => String(s || '')
+  .replace(/\\\(/g, '%%KATEX_LPAREN%%')
+  .replace(/\\\)/g, '%%KATEX_RPAREN%%')
+  .replace(/\\\[/g, '%%KATEX_LBRACK%%')
+  .replace(/\\\]/g, '%%KATEX_RBRACK%%');
+
+const restoreMathDelimiters = (s) => String(s || '')
+  .replace(/%%KATEX_LPAREN%%/g, '\\(')
+  .replace(/%%KATEX_RPAREN%%/g, '\\)')
+  .replace(/%%KATEX_LBRACK%%/g, '\\[')
+  .replace(/%%KATEX_RBRACK%%/g, '\\]');
+
+const renderBotResponseFinal = (contentDiv, rawText) => {
+  const finalContent = String(rawText ?? '')
+    .replace(/<think>[\s\S]*?<\/think>/g, '')
+    .trim();
+
+  // Stage 1: plain text first
+  contentDiv.textContent = finalContent;
+
+  // Markdown helper
+  const normalizeLists = (s) => String(s || '')
+    .replace(/([^\n])\n(-\s+)/g, '$1\n\n$2');
+
+  // Stage 2 + 3: markdown -> allowlist -> katex
+  requestAnimationFrame(() => {
+    const normalized = normalizeLists(finalContent);           // <-- must be used
+    const protectedMd = protectMathDelimiters(normalized);     // <-- protect after normalize
+    const htmlFromMd = window.marked
+      ? window.marked.parse(protectedMd, { async: false })
+      : protectedMd;
+
+    const restoredHtml = restoreMathDelimiters(htmlFromMd);
+    contentDiv.innerHTML = allowlistHtml(restoredHtml);
+
+    requestAnimationFrame(() => {
+      setTimeout(() => renderKatexOnce(contentDiv), 0);
+    });
+  });
+};
+
+
+      // ==================== UI CONTROLS ====================
+      const openChatWindow = () => {
+        agentState.isChatVisible = true;
+        widgetContainer.classList.add('active');
+      };
+
+      const closeChatWindow = () => {
+        if (agentState.isFullscreen) {
+          agentState.isFullscreen = false;
+          widgetContainer.classList.remove('fullscreen');
+          overlay.classList.remove('active');
+        }
+        agentState.isChatVisible = false;
+        widgetContainer.classList.remove('active');
+      };
+
+      const openModal = () => {
+        agentState.isModalVisible = true;
+        overlay.classList.add('active');
+        modalContainer.classList.add('active');
+      };
+
+      const closeModal = () => {
+        agentState.isModalVisible = false;
+        overlay.classList.remove('active');
+        modalContainer.classList.remove('active');
+      };
+
+      // ==================== CORE MESSAGING FUNCTION ====================
+// MODIFIED: Now async, with cache lookup before create/SSE.
+const sendMessage = async (detail) => {
+  // Normalize agent_text
+  if (detail.agentText && !detail.agent_text) {
+    detail.agent_text = detail.agentText;
+  }
+
+  const functionCalled = detail.function;
+  const userText = detail.agent_text;
+
+  if (!userText || !userText.trim() || !functionCalled) {
+    console.error('Missing required parameters:', detail);
+    return;
+  }
+
+  // Validate function exists
+  if (!functionUrls[functionCalled]) {
+    console.error('Unknown function:', functionCalled);
+    renderMessage(`Error: Unknown function "${functionCalled}"`, 'bot');
+    return;
+  }
+
+  // Display user message
+  renderMessage(userText, 'user');
+  showTypingIndicator();
+
+  try {
+    // ========================================================================
+    // STEP 1: HISTORY LOOKUP (CACHE CHECK)
+    // Query DB for existing cached response (same courseid, userid, usertext).
+    // If found and non-empty, render it and RETURN (no API call, no new row).
+    // ========================================================================
+    const cachedResult = await lookupHistory({ usertext: userText });
+
+    if (cachedResult.hit && cachedResult.botresponse) {
+      // Cache HIT: render cached response and return early.
+      hideTypingIndicator();
+
+      // Build bot message bubble.
+      const messageDiv = document.createElement('div');
+      messageDiv.className = 'ai-assistant-message from-bot';
+
+      const avatar = document.createElement('div');
+      avatar.className = 'ai-assistant-avatar';
+      avatar.textContent = 'A';
+
+      const contentDiv = document.createElement('div');
+      contentDiv.className = 'ai-assistant-message-content';
+
+      messageDiv.appendChild(avatar);
+      messageDiv.appendChild(contentDiv);
+      chatBody.appendChild(messageDiv);
+
+      // "Fetched from history" notice INSIDE the bubble (top).
+      const noticeDiv = document.createElement('div');
+      noticeDiv.className = 'ai-assistant-history-notice';
+      noticeDiv.textContent = cachedResult.notice || 'Fetched from history';
+      contentDiv.appendChild(noticeDiv);
+
+      // Response wrapper so renderBotResponseFinal doesn't wipe the notice.
+      const responseDiv = document.createElement('div');
+      responseDiv.className = 'ai-assistant-message-response';
+      contentDiv.appendChild(responseDiv);
+
+      // Render cached response into responseDiv.
+      renderBotResponseFinal(responseDiv, cachedResult.botresponse);
+
+      // Update state (localStorage + agentState).
+      const historyEntry = {
+        usertext: userText,
+        botresponse: cachedResult.botresponse,
+        functioncalled: functionCalled,
+        subject: detail.subject || '',
+        topic: detail.topic || (agentState.nextMessageContext && agentState.nextMessageContext.topic) || '',
+        lesson: detail.lesson || '',
+      };
+
+      agentState.messageHistory.push(historyEntry);
+      localStorage.setItem(`ai_assistant_history_${courseid}`, JSON.stringify(agentState.messageHistory));
+
+      // Scroll and cleanup.
+      chatBody.scrollTop = chatBody.scrollHeight;
+      chatInput.value = '';
+      chatInput.style.height = 'auto';
+
+      console.log('Cache hit - rendered from history, no API call made');
+      return; // STOP HERE: no create, no SSE, no duplicate insert.
+    }
+
+    // Cache MISS: continue with normal live flow (create + SSE + update).
+    // ========================================================================
+    // STEP 2: CREATE HISTORY ROW (idempotent, will reuse on race).
+    // ========================================================================
+    const historyEntry = {
+      usertext: userText,
+      botresponse: '',
+      functioncalled: functionCalled,
+      subject: detail.subject || '',
+      topic: detail.topic || (agentState.nextMessageContext && agentState.nextMessageContext.topic) || '',
+      lesson: detail.lesson || '',
+    };
+
+    agentState.messageHistory.push(historyEntry);
+    localStorage.setItem(`ai_assistant_history_${courseid}`, JSON.stringify(agentState.messageHistory));
+
+    // Save to database (create or reuse on race condition).
+    const createPayload = {
+      action: 'create',
+      sesskey: sesskey,
+      courseid: courseid,
+      history: historyEntry,
+    };
+
+    const createRes = await fetch(historyAjaxUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(createPayload),
+    });
+
+    const createData = await createRes.json();
+
+    if (createData.status !== 'success' || !createData.historyid) {
+      throw new Error(createData.message || 'Failed to create history');
+    }
+
+    const historyId = createData.historyid;
+
+    // ========================================================================
+    // STEP 3: CREATE MESSAGE CONTAINER (before SSE starts)
+    // Critical: contentDiv must exist before flushToDom() or SSE handlers use it.
+    // ========================================================================
+    hideTypingIndicator();
+
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'ai-assistant-message from-bot';
+    messageDiv.id = `streaming-message-${historyId}`;
+
+    const avatar = document.createElement('div');
+    avatar.className = 'ai-assistant-avatar';
+    avatar.textContent = 'A';
+
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'ai-assistant-message-content';
+    contentDiv.textContent = 'Connecting...';
+
+    messageDiv.appendChild(avatar);
+    messageDiv.appendChild(contentDiv);
+    chatBody.appendChild(messageDiv);
+    chatBody.scrollTop = chatBody.scrollHeight;
+
+    // ========================================================================
+    // STEP 4: BUILD SSE ENDPOINT URL WITH FUNCTION-SPECIFIC PARAMETERS
+    // ========================================================================
+    const agentParams = new URLSearchParams();
+    agentParams.append('sesskey', sesskey);
+    agentParams.append('agent_config_key', agentConfigKey);
+    agentParams.append('agent_text', userText);
+    agentParams.append('courseid', courseid);
+
+    // Function-specific parameters
+    if (functionCalled === 'mcq' && detail.level) {
+      agentParams.append('level', detail.level);
+    }
+
+    if (functionCalled === 'youtube_summarize' && detail.youtube_url) {
+      agentParams.append('youtube_url', detail.youtube_url);
+    }
+
+    if (functionCalled === 'websearch' && detail.search_query) {
+      agentParams.append('search_query', detail.search_query);
+    }
+
+    // Common parameters
+    if (detail.target) agentParams.append('target', detail.target);
+    if (detail.subject) agentParams.append('subject', detail.subject);
+    if (detail.topic) agentParams.append('topic', detail.topic);
+    if (detail.lesson) agentParams.append('lesson', detail.lesson);
+    if (detail.tags) {
+      const tagsToSend = Array.isArray(detail.tags) ? detail.tags.join(',') : detail.tags;
+      agentParams.append('tags', tagsToSend);
+    }
+
+    const endpointUrl = functionUrls[functionCalled] + '?' + agentParams.toString();
+
+    // ========================================================================
+    // STEP 5: START SSE STREAMING
+    // ========================================================================
+    const eventSource = new EventSource(endpointUrl);
+
+    let streamedContent = '';
+    let pending = '';
+    let hasReceivedData = false;
+    let streamComplete = false;
+    let metadata = {};
+    let inactivityTimer = null;
+
+    // Throttle DOM updates to avoid main-thread stalls.
+    const FLUSH_INTERVAL_MS = 80;
+    let lastFlush = 0;
+    let rafScheduled = false;
+
+    // CRITICAL: contentDiv is already defined above, so this function can safely use it.
+    const flushToDom = (force = false) => {
+      const now = performance.now();
+
+      if (!force && (now - lastFlush) < FLUSH_INTERVAL_MS) {
+        if (!rafScheduled) {
+          rafScheduled = true;
+          requestAnimationFrame(() => {
+            rafScheduled = false;
+            flushToDom(false);
+          });
+        }
+        return;
+      }
+
+      lastFlush = now;
+
+      if (pending) {
+        streamedContent += pending;
+        pending = '';
+      }
+
+      // contentDiv is in scope (defined in STEP 3).
+      contentDiv.textContent = streamedContent;
+      chatBody.scrollTop = chatBody.scrollHeight;
+    };
+
+    // Finalize stream function
+    const finalizeStream = (reason) => {
+      if (streamComplete) return;
+      streamComplete = true;
+      eventSource.close();
+
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+
+      console.log('Stream finalized:', reason);
+
+      // Flush pending content from throttle buffer
+      flushToDom(true);
+
+      // Final render (text -> markdown/html -> KaTeX)
+      const finalContent = streamedContent.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+      renderBotResponseFinal(contentDiv, finalContent);
+
+      // Update history uses the SAME finalContent
+      const lastMessage = agentState.messageHistory[agentState.messageHistory.length - 1];
+      if (lastMessage) lastMessage.botresponse = finalContent;
+      localStorage.setItem(`ai_assistant_history_${courseid}`, JSON.stringify(agentState.messageHistory));
+
+      // Save to database
+      fetch(historyAjaxUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'update',
+          sesskey: sesskey,
+          courseid: courseid,
+          historyid: historyId,
+          botresponse: finalContent,
+          metadata: metadata,
+        }),
+      }).catch(err => console.error('Failed to update history', err));
+    };
+
+    // Reset inactivity timer
+    const resetInactivityTimer = () => {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+
+      inactivityTimer = setTimeout(() => {
+        if (!streamComplete && hasReceivedData) {
+          console.log('No data for a while - auto-completing');
+          finalizeStream('inactivity');
+        }
+      }, 120000);
+    };
+
+    // Handle chunks
+    eventSource.addEventListener('chunk', (e) => {
+      hasReceivedData = true;
+      resetInactivityTimer();
+
+      try {
+        const data = JSON.parse(e.data);
+        if (data && data.content) {
+          pending += data.content;
+          flushToDom(false);
+        }
+      } catch (err) {
+        console.error('Failed to parse chunk:', err);
+      }
+    });
+
+    // Handle metadata
+    eventSource.addEventListener('metadata', (e) => {
+      try {
+        metadata = JSON.parse(e.data);
+      } catch (err) {
+        metadata = {};
+      }
+    });
+
+    // Handle done
+    eventSource.addEventListener('done', () => {
+      finalizeStream('done_event');
+    });
+
+    // Handle errors
+    eventSource.addEventListener('error', (e) => {
+      console.error('EventSource error', e);
+
+      if (!streamComplete) {
+        if (hasReceivedData) {
+          finalizeStream('error_with_data');
+        } else {
+          eventSource.close();
+          contentDiv.textContent = 'Connection lost. Please try again.';
+        }
+      }
+    });
+
+    eventSource.onerror = (e) => {
+      if (eventSource.readyState === EventSource.CLOSED && !streamComplete) {
+        console.error('EventSource closed', e);
+        if (hasReceivedData) {
+          finalizeStream('closed_with_data');
+        } else {
+          contentDiv.textContent = 'Connection failed.';
+        }
+      }
+    };
+
+    // Start monitoring
+    resetInactivityTimer();
+
+  } catch (error) {
+    console.error('AI Assistant error:', error);
+    hideTypingIndicator();
+    renderMessage(`Sorry, an error occurred: ${error.message}`, 'bot');
+  } finally {
+    // Clear input
+    chatInput.value = '';
+    chatInput.style.height = 'auto';
+  }
+};
+
+
+      // ==================== EVENT HANDLERS ====================
+      const handleTextInput = () => {
+        sendMessage({
+          function: 'ask_agent',
+          agent_text: chatInput.value,
+          subject: '',
+          topic: pageTopic,
+          lesson: '',
+          courseid: courseid
+        });
+      };
+
+      // Universal link click handler
+      document.addEventListener('click', (e) => {
+        // Study Notes / Ask Agent links
+        if (e.target.classList.contains('notes-link')) {
+          e.preventDefault();
+          const dataset = e.target.dataset;
+
+          if (!dataset.function || !dataset.agentText) {
+            console.error('Notes link missing required data');
+            return;
+          }
+
+          if (!agentState.isChatVisible) openChatWindow();
+
+          setTimeout(() => {
+            sendMessage({
+              function: dataset.function,
+              agent_text: dataset.agentText,
+              target: dataset.target || 'CSIR Chemical Sciences Exam',
+              subject: dataset.subject || '',
+              topic: dataset.topic || '',
+              lesson: dataset.lesson || '',
+              tags: dataset.tags || ''
+            });
+          }, agentState.isChatVisible ? 0 : 300);
+        }
+
+        // MCQ links
+        const mcqLink = e.target.closest('.mcq-link, .mcq-flashcard-link');
+        if (mcqLink) {
+          e.preventDefault();
+          const dataset = mcqLink.dataset;
+
+          if (!dataset.function || !dataset.level || !dataset.agentText) {
+            console.error('MCQ link missing required data');
+            return;
+          }
+
+          if (typeof window.openMCQWidget === 'function') {
+            window.openMCQWidget({
+              function: dataset.function,
+              level: dataset.level,
+              agent_text: dataset.agentText,
+              target: dataset.target || 'CSIR/GATE/UGC-NET Exam',
+              subject: dataset.subject || '',
+              topic: dataset.topic || '',
+              lesson: dataset.lesson || '',
+              tags: dataset.tags || ''
+            });
+          } else {
+            console.warn('openMCQWidget not available, using chat fallback');
+            if (!agentState.isChatVisible) openChatWindow();
+
+            setTimeout(() => {
+              sendMessage({
+                function: dataset.function,
+                level: dataset.level,
+                agent_text: dataset.agentText,
+                target: dataset.target || 'CSIR Chemical Sciences Exam',
+                subject: dataset.subject || '',
+                topic: dataset.topic || '',
+                lesson: dataset.lesson || '',
+                tags: dataset.tags || ''
+              });
+            }, agentState.isChatVisible ? 0 : 300);
+          }
+        }
+
+        // YouTube Summarize links
+        if (e.target.classList.contains('youtube-summarize-link')) {
+          e.preventDefault();
+          const dataset = e.target.dataset;
+
+          if (!dataset.function || !dataset.youtubeUrl) {
+            console.error('YouTube link missing required data');
+            return;
+          }
+
+          if (!agentState.isChatVisible) openChatWindow();
+
+          setTimeout(() => {
+            sendMessage({
+              function: dataset.function,
+              agent_text: dataset.agentText || 'Summarize this video',
+              youtube_url: dataset.youtubeUrl,
+              subject: dataset.subject || '',
+              topic: dataset.topic || ''
+            });
+          }, agentState.isChatVisible ? 0 : 300);
+        }
+      });
+
+      // Custom event listener (for programmatic calls)
+      document.addEventListener('ai-assistant-send', (e) => {
+        if (!agentState.isChatVisible) openChatWindow();
+        setTimeout(() => sendMessage(e.detail), agentState.isChatVisible ? 0 : 300);
+      });
+
+      // ==================== SYLLABUS FUNCTIONS ====================
+      const loadSyllabus = async () => {
+        if (agentState.syllabusData) {
+          console.log('Syllabus already loaded');
+          return;
+        }
+
+        try {
+          const url = `${syllabusAjaxUrl}?blockid=${blockInstanceId}&sesskey=${sesskey}`;
+          const response = await fetch(url);
+          if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+
+          const data = await response.json();
+          if (!data || !Array.isArray(data)) throw new Error('Invalid syllabus data structure (expected array)');
+
+          agentState.syllabusData = data;
+
+          if (window.aiAssistantHistoryWidgetInitialized) {
+            const event = new CustomEvent('syllabusLoaded', { detail: { syllabusData: data } });
+            document.dispatchEvent(event);
+          }
+        } catch (error) {
+          console.error("Failed to load syllabus:", error);
+          throw error;
+        }
+      };
+
+      // ==================== INITIALIZATION ====================
+      const init = () => {
+        widgetContainer.style.display = '';
+        modalContainer.style.display = '';
+
+        // Load cached history
+        const cachedHistory = localStorage.getItem(`ai_assistant_history_${courseid}`);
+        if (cachedHistory) {
+          try {
+            agentState.messageHistory = JSON.parse(cachedHistory);
+          } catch (e) {
+            agentState.messageHistory = [];
+          }
+        }
+        repaintHistory();
+
+        // Button listeners
+        triggerButton.addEventListener('click', () => {
+          agentState.isChatVisible ? closeChatWindow() : openChatWindow();
+        });
+
+        closeButton.addEventListener('click', closeChatWindow);
+
+        fullscreenButton.addEventListener('click', () => {
+          agentState.isFullscreen = !agentState.isFullscreen;
+          widgetContainer.classList.toggle('fullscreen', agentState.isFullscreen);
+          overlay.classList.toggle('active', agentState.isFullscreen);
+        });
+
+        // History button
+        const historyButton = document.getElementById('ai-assistant-history-button');
+        if (historyButton) {
+          historyButton.addEventListener('click', () => {
+            if (typeof window.openHistoryWidget === 'function') {
+              window.openHistoryWidget();
+
+              if (agentState.syllabusData) {
+                const event = new CustomEvent('syllabusLoaded', { detail: { syllabusData: agentState.syllabusData } });
+                document.dispatchEvent(event);
+              } else {
+                loadSyllabus();
+              }
+            } else {
+              console.error('openHistoryWidget not available');
+            }
+          });
+        }
+
+        sendButton.addEventListener('click', handleTextInput);
+
+        chatInput.addEventListener('keypress', e => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleTextInput();
+          }
+        });
+
+        chatInput.addEventListener('input', () => {
+          chatInput.style.height = 'auto';
+          chatInput.style.height = (chatInput.scrollHeight) + 'px';
+        });
+
+        // Guided search
+        guidedSearchButton.addEventListener('click', async () => {
+          await loadSyllabus();
+          if (!agentState.syllabusData) {
+            alert('Could not load syllabus data.');
+            return;
+          }
+
+          modalSubject.innerHTML = '<option value="">-- Please select a subject --</option>';
+          agentState.syllabusData.forEach(sub => {
+            const option = document.createElement('option');
+            option.value = sub.subject_key;
+            option.textContent = sub.subject;
+            modalSubject.appendChild(option);
+          });
+
+          modalTopic.innerHTML = '<option value="">-- Please select a topic --</option>';
+          modalLesson.innerHTML = '<option value="">-- Please select a lesson --</option>';
+          modalTopic.disabled = true;
+          modalLesson.disabled = true;
+          openModal();
+        });
+
+        modalSubject.addEventListener('change', () => {
+          const selectedSubjectKey = modalSubject.value;
+          modalTopic.innerHTML = '<option value="">-- Please select a topic --</option>';
+          modalLesson.innerHTML = '<option value="">-- Please select a lesson --</option>';
+          modalTopic.disabled = true;
+          modalLesson.disabled = true;
+
+          const subjectData = agentState.syllabusData.find(s => s.subject_key === selectedSubjectKey);
+          if (subjectData && subjectData.topics) {
+            subjectData.topics.forEach(topic => {
+              const option = document.createElement('option');
+              option.value = topic.topic_key;
+              option.textContent = topic.topic;
+              modalTopic.appendChild(option);
+            });
+            modalTopic.disabled = false;
+          }
+        });
+
+        modalTopic.addEventListener('change', () => {
+          const selectedSubjectKey = modalSubject.value;
+          const selectedTopicKey = modalTopic.value;
+          modalLesson.innerHTML = '<option value="">-- Please select a lesson --</option>';
+          modalLesson.disabled = true;
+
+          const subjectData = agentState.syllabusData.find(s => s.subject_key === selectedSubjectKey);
+          const topicData = subjectData ? subjectData.topics.find(t => t.topic_key === selectedTopicKey) : null;
+
+          if (topicData && topicData.lessons && topicData.lessons.length > 0) {
+            topicData.lessons.forEach((lesson) => {
+              const option = document.createElement('option');
+
+              if (typeof lesson === 'string') {
+                option.value = lesson;
+                option.textContent = lesson;
+              } else {
+                option.value = lesson.lesson_key;
+                option.textContent = lesson.lesson;
+              }
+
+              modalLesson.appendChild(option);
+            });
+
+            modalLesson.disabled = false;
+          }
+        });
+
+        modalForm.addEventListener('submit', (e) => {
+          e.preventDefault();
+
+          const selectedSubjectKey = modalSubject.value;
+          const selectedTopicKey = modalTopic.value;
+          const selectedLessonKey = modalLesson.value;
+
+          const subjectData = agentState.syllabusData.find(s => s.subject_key === selectedSubjectKey);
+          const topicData = subjectData ? subjectData.topics.find(t => t.topic_key === selectedTopicKey) : null;
+
+          let tagsForQuery = [];
+
+          if (topicData && topicData.lessons) {
+            const lessonData = topicData.lessons.find(l => {
+              if (typeof l === 'string') return l === selectedLessonKey;
+              return l.lesson_key === selectedLessonKey;
+            });
+
+            if (lessonData && typeof lessonData === 'object' && lessonData.tags) {
+              tagsForQuery = lessonData.tags;
+            }
+          }
+
+          sendMessage({
+            function: 'ask_agent',
+            agent_text: modalQuestion.value,
+            subject: selectedSubjectKey,
+            topic: selectedTopicKey,
+            lesson: selectedLessonKey,
+            tags: tagsForQuery
+          });
+
+          modalForm.reset();
+          closeModal();
+          if (!agentState.isChatVisible) openChatWindow();
+        });
+
+        modalCancel.addEventListener('click', closeModal);
+		
+		// Tooltips (Bootstrap 5) — add near the end of init()
+			if (window.bootstrap && typeof window.bootstrap.Tooltip === 'function') {
+			const tooltipTriggerList = document.querySelectorAll('[data-bs-toggle="tooltip"]');
+			[...tooltipTriggerList].forEach(el => new bootstrap.Tooltip(el));
+			}
+
+		
+      };
+
+      init();
+    })();
+
+    window.aiAssistantInitialized = true;
+  }
+</script>

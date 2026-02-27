@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<XMLDB PATH="blocks/ai_assistant/db" VERSION="2025122002" COMMENT="AI Assistant block tables">
+  <TABLES>
+
+    <!-- Existing table (kept): chat history -->
+    <TABLE NAME="block_ai_assistant_history" COMMENT="Chat history for AI Assistant">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="courseid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="usertext" TYPE="text" NOTNULL="true"/>
+        <FIELD NAME="botresponse" TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="functioncalled" TYPE="char" LENGTH="50" NOTNULL="true" DEFAULT="ask_agent"/>
+        <FIELD NAME="subject" TYPE="char" LENGTH="255" NOTNULL="false"/>
+        <FIELD NAME="topic" TYPE="char" LENGTH="255" NOTNULL="false"/>
+        <FIELD NAME="lesson" TYPE="char" LENGTH="255" NOTNULL="false"/>
+        <FIELD NAME="metadata" TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="courseid" UNIQUE="false" FIELDS="courseid"/>
+        <INDEX NAME="userid" UNIQUE="false" FIELDS="userid"/>
+        <INDEX NAME="timecreated" UNIQUE="false" FIELDS="timecreated"/>
+      </INDEXES>
+    </TABLE>
+
+    <!-- NEW table: one syllabus per block instance -->
+<TABLE NAME="block_ai_assistant_syllabus" COMMENT="Syllabus JSON stored per block instance">
+  <FIELDS>
+    <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+    <FIELD NAME="blockinstanceid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+
+    <!-- IMPORTANT: No DEFAULT="" for NOTNULL CHAR fields -->
+    <FIELD NAME="agent_key" TYPE="char" LENGTH="100" NOTNULL="true"/>
+    <FIELD NAME="mainsubjectkey" TYPE="char" LENGTH="255" NOTNULL="true"/>
+
+    <FIELD NAME="syllabus_json" TYPE="text" NOTNULL="true"/>
+
+    <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+    <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+  </FIELDS>
+  <KEYS>
+    <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+    <!-- UNIQUE key already creates an index; do NOT add a second index on the same field -->
+    <KEY NAME="blockinstanceid_uq" TYPE="unique" FIELDS="blockinstanceid"/>
+  </KEYS>
+</TABLE>
+
+  </TABLES>
+</XMLDB>

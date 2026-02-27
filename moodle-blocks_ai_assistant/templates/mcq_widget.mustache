@@ -1,0 +1,675 @@
+{{!
+    FILE: blocks/ai_assistant/templates/mcq_widget.mustache
+    PURPOSE: Flashcard-style MCQ practice modal with LaTeX support
+    FEATURES: Card-by-card display, Show Answer/Question toggle, keyboard navigation, practice again support, KaTeX rendering
+    SECURITY: Includes sesskey validation for AJAX requests, duplicate click prevention
+}}
+
+<!-- KaTeX CSS -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.15.1/dist/katex.min.css">
+
+<!-- MCQ Flashcard Modal -->
+<div id="ai-assistant-mcq-modal" class="ai-assistant-mcq-modal" style="display: none;">
+    <div class="ai-assistant-mcq-modal-content">
+        
+        <!-- Header -->
+        <div class="ai-assistant-mcq-modal-header">
+            <h3 id="ai-assistant-mcq-title">Question 1/10</h3>
+            <button id="ai-assistant-mcq-close" class="ai-assistant-mcq-close-button" aria-label="Close MCQ">
+                ×
+            </button>
+        </div>
+        
+        <!-- Flashcard Container -->
+        <div id="ai-assistant-mcq-card" class="ai-assistant-mcq-card">
+            <div class="mcq-card-content">
+                <!-- Question View -->
+                <div id="mcq-question-view" class="mcq-view">
+                    <div class="mcq-question-text"></div>
+                    <div class="mcq-options"></div>
+                </div>
+                
+                <!-- Answer View -->
+                <div id="mcq-answer-view" class="mcq-view" style="display: none;">
+                    <div class="mcq-correct-answer"></div>
+                    <div class="mcq-explanation"></div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Controls -->
+        <div class="ai-assistant-mcq-controls">
+            <button id="mcq-prev-button" class="mcq-nav-button" aria-label="Previous question" disabled>
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 16 16">
+                    <path fill-rule="evenodd" d="M11.354 1.646a.5.5 0 0 1 0 .708L5.707 8l5.647 5.646a.5.5 0 0 1-.708.708l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0z"/>
+                </svg>
+            </button>
+            
+            <button id="mcq-toggle-button" class="mcq-toggle-button">Show Answer</button>
+            
+            <button id="mcq-next-button" class="mcq-nav-button" aria-label="Next question">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 16 16">
+                    <path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708z"/>
+                </svg>
+            </button>
+        </div>
+        
+        <!-- Loading State -->
+        <div id="mcq-loading" class="mcq-loading" style="display: none;">
+            <div class="spinner"></div>
+            <p>Generating MCQs...</p>
+        </div>
+        
+    </div>
+</div>
+
+<!-- KaTeX JavaScript -->
+<script src="https://cdn.jsdelivr.net/npm/katex@0.15.1/dist/katex.min.js"></script>
+
+<script>
+(function() {
+  'use strict';
+
+  // Check if already initialized.
+  if (window.aiAssistantMCQWidgetInitialized) {
+    console.log('⚠️ MCQ Widget already initialized');
+    return;
+  }
+
+  console.log('🎴 Initializing MCQ Flashcard Widget with LaTeX support...');
+
+  // ==================== CONFIGURATION ====================
+  const agentConfigKey = '{{agentkey}}';
+  const mainSubjectKey = '{{mainsubjectkey}}';
+  const sesskey = '{{sesskey}}';
+  const courseid = {{courseid}};
+  const mcqWidgetAjaxUrl = '{{mcqwidgetajaxurl}}';
+  const defaultTargetExam = '{{targetexam}}';
+
+  // Validate required configuration.
+  if (!sesskey || sesskey === '{{' + 'sesskey' + '}}') {
+    console.error('❌ MCQ Widget: Session key not available');
+    return;
+  }
+  if (!agentConfigKey || agentConfigKey === '{{' + 'agentkey' + '}}') {
+    console.error('❌ MCQ Widget: Agent config key not available');
+    return;
+  }
+
+  console.log('✅ Configuration loaded:', {
+    agentKey: agentConfigKey,
+    mainSubject: mainSubjectKey,
+    courseId: courseid,
+    defaultTargetExam: defaultTargetExam,
+    hasSesskey: !!sesskey,
+    hasKaTeX: typeof window.katex !== 'undefined'
+  });
+
+  // ==================== DOM ELEMENTS ====================
+  const modal = document.getElementById('ai-assistant-mcq-modal');
+  const closeButton = document.getElementById('ai-assistant-mcq-close');
+  const titleElement = document.getElementById('ai-assistant-mcq-title');
+  const cardElement = document.getElementById('ai-assistant-mcq-card');
+  const questionView = document.getElementById('mcq-question-view');
+  const answerView = document.getElementById('mcq-answer-view');
+  const toggleButton = document.getElementById('mcq-toggle-button');
+  const prevButton = document.getElementById('mcq-prev-button');
+  const nextButton = document.getElementById('mcq-next-button');
+  const loadingElement = document.getElementById('mcq-loading');
+
+  if (!modal || !closeButton || !titleElement || !cardElement || !questionView || !answerView || !toggleButton || !prevButton || !nextButton || !loadingElement) {
+    console.error('❌ MCQ Widget: Required DOM elements not found');
+    return;
+  }
+
+  // ==================== DOM ENHANCEMENTS (NO HTML EDITS REQUIRED) ====================
+  const ensureFeedbackEl = () => {
+    const optionsEl = questionView.querySelector('.mcq-options');
+    if (!optionsEl) return null;
+
+    let feedbackEl = questionView.querySelector('.mcq-feedback');
+    if (!feedbackEl) {
+      feedbackEl = document.createElement('div');
+      feedbackEl.className = 'mcq-feedback';
+      feedbackEl.setAttribute('aria-live', 'polite');
+      optionsEl.insertAdjacentElement('afterend', feedbackEl);
+    }
+    return feedbackEl;
+  };
+
+  const ensureCheckButton = () => {
+    let btn = document.getElementById('mcq-check-button');
+    if (btn) return btn;
+
+    // Insert before toggle button (if possible).
+    btn = document.createElement('button');
+    btn.id = 'mcq-check-button';
+    btn.type = 'button';
+    btn.className = 'mcq-check-button';
+    btn.textContent = 'Check Answer';
+    btn.disabled = true;
+
+    const toggle = document.getElementById('mcq-toggle-button');
+    if (toggle && toggle.parentNode) {
+      toggle.parentNode.insertBefore(btn, toggle);
+    } else {
+      // Fallback: append into card.
+      cardElement.appendChild(btn);
+    }
+
+    return btn;
+  };
+
+  const injectStylesOnce = () => {
+    if (document.getElementById('ai-assistant-mcq-test-styles')) return;
+
+    const style = document.createElement('style');
+    style.id = 'ai-assistant-mcq-test-styles';
+    style.textContent = `
+      .mcq-option { padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 8px; margin: 10px 0; }
+      .mcq-option-label { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+      .mcq-option-input { margin-top: 4px; }
+      .mcq-option.is-correct { border-color: #2f855a; background: #f0fff4; }
+      .mcq-option.is-wrong { border-color: #c53030; background: #fff5f5; }
+      .mcq-feedback { margin-top: 10px; font-weight: 600; }
+      .mcq-feedback.is-correct { color: #2f855a; }
+      .mcq-feedback.is-wrong { color: #c53030; }
+    `;
+    document.head.appendChild(style);
+  };
+
+  const feedbackEl = ensureFeedbackEl();
+  const checkButton = ensureCheckButton();
+  injectStylesOnce();
+
+  // ==================== STATE ====================
+  let mcqData = null;
+  let currentCardIndex = 0;
+  let showingAnswer = false;
+  let historyId = null;
+  let isLoadingMcq = false;
+  let lastClickTime = 0;
+
+  // New: selection + check state per card.
+  let selectedAnswers = Object.create(null); // { [index]: 'A'|'B'|'C'|'D' }
+  let checkedAnswers = Object.create(null);  // { [index]: { selected: 'A', isCorrect: boolean } }
+
+  // ==================== UTILITY FUNCTIONS ====================
+  const escapeHtml = (text) => {
+    const div = document.createElement('div');
+    div.textContent = String(text ?? '');
+    return div.innerHTML;
+  };
+
+  // ==================== LATEX RENDERING ====================
+  const renderLatex = (text) => {
+    if (!window.katex) {
+      return text;
+    }
+    let rendered = text;
+
+    // Display math: \[ ... \]
+    rendered = rendered.replace(/\\\[(\s\S]*?)\\\]/g, (match, latex) => {
+      try {
+        return katex.renderToString(latex.trim(), { displayMode: true, throwOnError: false, output: 'html' });
+      } catch (e) {
+        console.error('KaTeX display error:', e);
+        return match;
+      }
+    });
+
+    // Inline math: \( ... \)
+    rendered = rendered.replace(/\\\(([\s\S]*?)\\\)/g, (match, latex) => {
+      try {
+        return katex.renderToString(latex.trim(), { displayMode: false, throwOnError: false, output: 'html' });
+      } catch (e) {
+        console.error('KaTeX inline error:', e);
+        return match;
+      }
+    });
+
+    return rendered;
+  };
+
+  // ==================== CHECK ANSWER UI ====================
+  const clearFeedbackAndStyling = () => {
+    const fb = ensureFeedbackEl();
+    if (fb) {
+      fb.textContent = '';
+      fb.classList.remove('is-correct', 'is-wrong');
+    }
+    const optionsEl = questionView.querySelector('.mcq-options');
+    if (optionsEl) {
+      optionsEl.querySelectorAll('.mcq-option').forEach(el => el.classList.remove('is-correct', 'is-wrong'));
+    }
+  };
+
+  const applyCheckStyling = (index) => {
+    const fb = ensureFeedbackEl();
+    const optionsEl = questionView.querySelector('.mcq-options');
+    if (!fb || !optionsEl) return;
+
+    optionsEl.querySelectorAll('.mcq-option').forEach(el => el.classList.remove('is-correct', 'is-wrong'));
+    fb.classList.remove('is-correct', 'is-wrong');
+
+    const checked = checkedAnswers[index];
+    if (!checked) return;
+
+    const selectedLetter = checked.selected;
+    const selectedInput = optionsEl.querySelector(`input[value="${selectedLetter}"]`);
+    const selectedWrapper = selectedInput ? selectedInput.closest('.mcq-option') : null;
+
+    if (checked.isCorrect) {
+      fb.textContent = 'Correct.';
+      fb.classList.add('is-correct');
+      if (selectedWrapper) selectedWrapper.classList.add('is-correct');
+    } else {
+      fb.textContent = 'Incorrect.';
+      fb.classList.add('is-wrong');
+      if (selectedWrapper) selectedWrapper.classList.add('is-wrong');
+    }
+  };
+
+  const checkCurrentAnswer = () => {
+    if (!mcqData?.questions?.[currentCardIndex]) return;
+    if (showingAnswer) return;
+
+    const selected = selectedAnswers[currentCardIndex];
+    const fb = ensureFeedbackEl();
+
+    if (!selected) {
+      if (fb) {
+        fb.textContent = 'Select an option to check.';
+        fb.classList.remove('is-correct');
+        fb.classList.add('is-wrong');
+      }
+      return;
+    }
+
+    const card = mcqData.questions[currentCardIndex];
+    const isCorrect = (selected === card.correct);
+
+    checkedAnswers[currentCardIndex] = { selected, isCorrect };
+    applyCheckStyling(currentCardIndex);
+  };
+
+  if (checkButton) {
+    checkButton.addEventListener('click', checkCurrentAnswer);
+  }
+
+  // ==================== RENDERING ====================
+  const renderCard = (index) => {
+    if (!mcqData || !mcqData.questions || index >= mcqData.questions.length) {
+      console.error('❌ Invalid card index:', index);
+      return;
+    }
+
+    const card = mcqData.questions[index];
+    const totalCards = mcqData.questions.length;
+
+    // Update title.
+    titleElement.textContent = `Question ${index + 1}/${totalCards}`;
+
+    // Render question view with LaTeX.
+    const questionTextEl = questionView.querySelector('.mcq-question-text');
+    const optionsEl = questionView.querySelector('.mcq-options');
+
+    if (!questionTextEl || !optionsEl) {
+      console.error('❌ MCQ Widget: question text/options container not found');
+      return;
+    }
+
+    const renderedQuestion = renderLatex(card.question);
+    questionTextEl.innerHTML = `<p><strong>${renderedQuestion}</strong></p>`;
+
+    // Clear old feedback/styling.
+    clearFeedbackAndStyling();
+
+    // Render options as radio buttons.
+    optionsEl.innerHTML = '';
+    const groupName = `mcq-option-${index}`;
+
+    card.options.forEach((option, i) => {
+      const optionLetter = String.fromCharCode(65 + i); // A, B, C, D
+      const renderedOption = renderLatex(option);
+      const optionId = `${groupName}-${optionLetter}`;
+
+      const optionWrapper = document.createElement('div');
+      optionWrapper.className = 'mcq-option';
+      optionWrapper.innerHTML = `
+        <label class="mcq-option-label" for="${optionId}">
+          <input
+            type="radio"
+            id="${optionId}"
+            name="${groupName}"
+            value="${optionLetter}"
+            class="mcq-option-input"
+          />
+          <span class="mcq-option-text">
+            <strong>${optionLetter})</strong> ${renderedOption}
+          </span>
+        </label>
+      `;
+
+      optionsEl.appendChild(optionWrapper);
+
+      const input = optionWrapper.querySelector('input');
+
+      // Restore previous selection (if any).
+      if (selectedAnswers[index] === optionLetter) {
+        input.checked = true;
+      }
+
+      input.addEventListener('change', () => {
+        selectedAnswers[index] = optionLetter;
+        delete checkedAnswers[index];
+        clearFeedbackAndStyling();
+        if (checkButton) checkButton.disabled = false;
+      });
+    });
+
+    // Render answer view with LaTeX (existing behavior).
+    const correctAnswerEl = answerView.querySelector('.mcq-correct-answer');
+    const explanationEl = answerView.querySelector('.mcq-explanation');
+
+    if (correctAnswerEl && explanationEl) {
+      const correctIndex = card.correct.charCodeAt(0) - 65;
+      const correctText = card.options[correctIndex] || '';
+      const renderedCorrectText = renderLatex(correctText);
+
+      correctAnswerEl.innerHTML = `
+        <div class="correct-badge">✓ Correct Answer: ${escapeHtml(card.correct)}</div>
+        <p><strong>${escapeHtml(card.correct)})</strong> ${renderedCorrectText}</p>
+      `;
+
+      const renderedExplanation = renderLatex(card.explanation);
+      explanationEl.innerHTML = `
+        <div class="explanation-label">💡 Explanation</div>
+        <div>${renderedExplanation}</div>
+      `;
+    }
+
+    // Reset view to question.
+    showingAnswer = false;
+    questionView.style.display = 'block';
+    answerView.style.display = 'none';
+    toggleButton.textContent = 'Show Answer';
+
+    // Update navigation buttons.
+    prevButton.disabled = (index === 0);
+    nextButton.disabled = (index === totalCards - 1);
+
+    // Check button state (only in question view).
+    if (checkButton) {
+      checkButton.disabled = !selectedAnswers[index];
+    }
+
+    // If already checked, restore correctness styling.
+    applyCheckStyling(index);
+
+    // Visual feedback.
+    cardElement.style.opacity = '0';
+    setTimeout(() => {
+      cardElement.style.opacity = '1';
+    }, 50);
+  };
+
+  const toggleView = () => {
+    showingAnswer = !showingAnswer;
+
+    if (showingAnswer) {
+      questionView.style.display = 'none';
+      answerView.style.display = 'block';
+      toggleButton.textContent = 'Show Question';
+      if (checkButton) checkButton.disabled = true;
+    } else {
+      questionView.style.display = 'block';
+      answerView.style.display = 'none';
+      toggleButton.textContent = 'Show Answer';
+      if (checkButton) checkButton.disabled = !selectedAnswers[currentCardIndex];
+      applyCheckStyling(currentCardIndex);
+    }
+  };
+
+  // ==================== NAVIGATION ====================
+  const navigateCard = (direction) => {
+    if (!mcqData?.questions?.length) return;
+
+    const newIndex = currentCardIndex + direction;
+    if (newIndex >= 0 && newIndex < mcqData.questions.length) {
+      currentCardIndex = newIndex;
+      renderCard(currentCardIndex);
+    }
+  };
+
+  // ==================== FETCH MCQ DATA ====================
+  const fetchMCQData = async (params) => {
+    loadingElement.style.display = 'flex';
+    cardElement.style.display = 'none';
+
+    try {
+      const url = new URL(mcqWidgetAjaxUrl, window.location.origin);
+      url.searchParams.append('sesskey', sesskey);
+      url.searchParams.append('agent_config_key', agentConfigKey);
+      url.searchParams.append('agent_text', params.agent_text);
+      url.searchParams.append('level', params.level);
+      url.searchParams.append('mainsubject', mainSubjectKey);
+      url.searchParams.append('courseid', courseid);
+
+      if (params.target) url.searchParams.append('target', params.target);
+      if (params.subject) url.searchParams.append('subject', params.subject);
+      if (params.topic) url.searchParams.append('topic', params.topic);
+      if (params.lesson) url.searchParams.append('lesson', params.lesson);
+      if (params.tags) url.searchParams.append('tags', params.tags);
+      if (params.number) url.searchParams.append('number', params.number);
+
+      console.log('🌐 Fetching MCQ data:', url.toString());
+
+      const response = await fetch(url);
+      if (!response.ok) {
+        const errorText = await response.text();
+        let errorMsg = `HTTP ${response.status}: ${response.statusText}`;
+
+        try {
+          const errorJson = JSON.parse(errorText);
+          if (errorJson.message) errorMsg = errorJson.message;
+          if (errorJson.code === 'INVALID_SESSKEY') {
+            errorMsg = 'Session expired. Please refresh the page and try again.';
+          }
+        } catch (e) {
+          // Not JSON.
+        }
+
+        throw new Error(errorMsg);
+      }
+
+      const result = await response.json();
+      if (result.status !== 'success' || !result.data) {
+        throw new Error(result.message || 'Failed to generate MCQs');
+      }
+
+      // Reset per-run state.
+      selectedAnswers = Object.create(null);
+      checkedAnswers = Object.create(null);
+      clearFeedbackAndStyling();
+      if (checkButton) checkButton.disabled = true;
+
+      mcqData = result.data;
+      currentCardIndex = 0;
+      historyId = mcqData.metadata?.history_id || null;
+
+      loadingElement.style.display = 'none';
+      cardElement.style.display = 'block';
+
+      renderCard(0);
+
+      console.log('✅ MCQ data loaded:', mcqData.questions.length, 'questions');
+    } catch (error) {
+      console.error('❌ Failed to fetch MCQ data:', error);
+
+      loadingElement.innerHTML = `
+        <div class="error-message">
+          <p style="color: #e53e3e; font-weight: 600;">❌ Failed to generate MCQs</p>
+          <p style="color: #4a5568;">${escapeHtml(error.message)}</p>
+          <button onclick="window.closeMCQWidget()"
+            style="margin-top: 16px; padding: 10px 24px; background: #667eea; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 1rem;">
+            Close
+          </button>
+        </div>
+      `;
+    }
+  };
+
+  // ==================== MODAL CONTROLS ====================
+  window.openMCQWidget = function(params) {
+    if (isLoadingMcq) {
+      console.log('⏳ MCQ request already in progress, ignoring click');
+      return;
+    }
+    isLoadingMcq = true;
+
+    console.log('🎴 Opening MCQ Widget with params:', params);
+    modal.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+
+    fetchMCQData(params).finally(() => {
+      isLoadingMcq = false;
+    });
+  };
+
+  window.closeMCQWidget = function() {
+    console.log('❌ Closing MCQ Widget');
+    modal.style.display = 'none';
+    document.body.style.overflow = '';
+
+    mcqData = null;
+    currentCardIndex = 0;
+    showingAnswer = false;
+    historyId = null;
+    isLoadingMcq = false;
+
+    selectedAnswers = Object.create(null);
+    checkedAnswers = Object.create(null);
+    clearFeedbackAndStyling();
+    if (checkButton) checkButton.disabled = true;
+
+    // Reset loading state.
+    loadingElement.innerHTML = `
+      <div class="spinner"></div>
+      <p>Generating MCQs...</p>
+    `;
+    loadingElement.style.display = 'none';
+    cardElement.style.display = 'block';
+  };
+
+  // ==================== PRACTICE AGAIN FUNCTIONALITY ====================
+  window.openMCQWidgetWithData = function(mcqDataFromHistory) {
+    console.log('🔄 Reopening MCQ practice with existing data');
+
+    if (!mcqDataFromHistory || !mcqDataFromHistory.questions || mcqDataFromHistory.questions.length === 0) {
+      console.error('Invalid MCQ data for replay');
+      alert('Invalid MCQ data. Cannot practice these questions.');
+      return;
+    }
+
+    mcqData = mcqDataFromHistory;
+    currentCardIndex = 0;
+    showingAnswer = false;
+    historyId = null;
+
+    selectedAnswers = Object.create(null);
+    checkedAnswers = Object.create(null);
+    clearFeedbackAndStyling();
+    if (checkButton) checkButton.disabled = true;
+
+    modal.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+
+    loadingElement.style.display = 'none';
+    cardElement.style.display = 'block';
+
+    renderCard(0);
+
+    console.log('✅ MCQ practice reopened with', mcqData.questions.length, 'questions');
+  };
+
+  // ==================== EVENT HANDLERS ====================
+  closeButton.addEventListener('click', window.closeMCQWidget);
+  toggleButton.addEventListener('click', toggleView);
+  prevButton.addEventListener('click', () => navigateCard(-1));
+  nextButton.addEventListener('click', () => navigateCard(1));
+
+  // Keyboard navigation.
+  document.addEventListener('keydown', (e) => {
+    if (modal.style.display !== 'flex') return;
+
+    switch (e.key) {
+      case 'ArrowLeft':
+        if (!prevButton.disabled) navigateCard(-1);
+        break;
+      case 'ArrowRight':
+        if (!nextButton.disabled) navigateCard(1);
+        break;
+      case ' ':
+      case 'Enter':
+        if (e.target.tagName !== 'BUTTON') {
+          e.preventDefault();
+          toggleView();
+        }
+        break;
+      case 'Escape':
+        window.closeMCQWidget();
+        break;
+    }
+  });
+
+  // Close on overlay click.
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      window.closeMCQWidget();
+    }
+  });
+
+  // ==================== LINK HANDLER WITH DEBOUNCING ====================
+  document.addEventListener('click', (e) => {
+    const link = e.target.closest('.mcq-flashcard-link');
+    if (!link) return;
+
+    e.preventDefault();
+
+    // Debounce: ignore rapid clicks within 300ms.
+    const now = Date.now();
+    if (now - lastClickTime < 300) {
+      console.log('⏱️ Click debounced (too fast)');
+      return;
+    }
+    lastClickTime = now;
+
+    const dataset = link.dataset;
+    if (!dataset.function || !dataset.level || !dataset.agentText) {
+      console.error('❌ MCQ flashcard link missing required data attributes');
+      return;
+    }
+
+    const targetExam = dataset.target || defaultTargetExam || 'CSIR / GATE / UGC-NET Examinations';
+
+    window.openMCQWidget({
+      function: dataset.function,
+      level: dataset.level,
+      agent_text: dataset.agentText,
+      target: targetExam,
+      subject: dataset.subject || '',
+      topic: dataset.topic || '',
+      lesson: dataset.lesson || '',
+      tags: dataset.tags || '',
+      number: dataset.number || ''
+    });
+  });
+
+  // Smooth transition.
+  cardElement.style.transition = 'opacity 0.3s ease-in-out';
+
+  console.log('✅ MCQ Flashcard Widget initialized with LaTeX rendering + test-style checking');
+  window.aiAssistantMCQWidgetInitialized = true;
+})();
+</script>

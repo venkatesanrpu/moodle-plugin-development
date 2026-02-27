@@ -1,0 +1,253 @@
+<?php
+defined('MOODLE_INTERNAL') || die();
+
+/**
+ * Streaming-only call for GPT-5-mini via Azure Responses API.
+ * Reads connection details from mdl_local_ai_functions_agents.config_data.
+ *
+ * @param string $agentconfigkey Agent key in local_ai_functions_agents.agent_key
+ * @param string $functionname   Key inside config_data JSON (e.g. "ask_agent")
+ * @param array  $payload        From ask_agent_ajax.php (messages[], stream=>true, max_completion_tokens, temperature)
+ * @return void Streams SSE events to the client
+ */
+function local_ai_functions_call_endpoint(string $agentconfigkey, string $functionname, array $payload): void {
+    global $DB, $gpt5_stream_buffer;
+
+    $gpt5_stream_buffer = '';
+
+    // 1. Load agent row.
+    $agent = $DB->get_record('local_ai_functions_agents', ['agent_key' => $agentconfigkey]);
+    if (!$agent) {
+        error_log("GPT5 ERROR: Agent not found: {$agentconfigkey}");
+        echo "event: error\n";
+        echo "data: " . json_encode(['error' => "Agent not found: {$agentconfigkey}"]) . "\n\n";
+        flush();
+        return;
+    }
+
+    // 2. Parse config_data JSON and pick function config.
+    $config = json_decode($agent->config_data, true);
+    if (!$config || !isset($config[$functionname])) {
+        error_log("GPT5 ERROR: Function not configured: {$functionname}");
+        echo "event: error\n";
+        echo "data: " . json_encode(['error' => "Function not configured: {$functionname}"]) . "\n\n";
+        flush();
+        return;
+    }
+
+    $function_config = $config[$functionname];
+
+    $endpoint    = $function_config['endpoint']    ?? '';
+    $api_key     = $function_config['api_key']     ?? '';
+    $api_version = $function_config['api_version'] ?? '2025-04-01-preview';
+    $model       = $function_config['model']       ?? 'gpt-5-mini';
+
+    if ($endpoint === '' || $api_key === '') {
+        error_log("GPT5 ERROR: Invalid agent configuration (endpoint/api_key missing)");
+        echo "event: error\n";
+        echo "data: " . json_encode(['error' => 'Invalid agent configuration (endpoint/api_key missing)']) . "\n\n";
+        flush();
+        return;
+    }
+
+    // 3. Normalize endpoint for Responses API.
+    if (strpos($endpoint, '/openai/responses') === false) {
+        $endpoint = rtrim($endpoint, '/') . '/openai/responses';
+    }
+
+    // 4. Normalize payload for Responses API.
+    //    - Move messages -> input
+    //    - Map max_* -> max_output_tokens
+    if (isset($payload['messages'])) {
+        $payload['input'] = $payload['messages'];
+        unset($payload['messages']);
+    }
+
+    if (isset($payload['max_completion_tokens'])) {
+        $payload['max_output_tokens'] = $payload['max_completion_tokens'];
+        unset($payload['max_completion_tokens']);
+    } elseif (isset($payload['max_tokens'])) {
+        $payload['max_output_tokens'] = $payload['max_tokens'];
+        unset($payload['max_tokens']);
+    } elseif (!isset($payload['max_output_tokens'])) {
+        $payload['max_output_tokens'] = 2048;
+    }
+
+    if (!isset($payload['model'])) {
+        $payload['model'] = $model;
+    }
+
+    // 5. Build full URL.
+    $full_url = $endpoint . '?api-version=' . urlencode($api_version);
+
+    // 6. Log request details.
+    //error_log("GPT5 STREAM URL: " . $full_url);
+    //error_log("GPT5 STREAM PAYLOAD: " . json_encode($payload));
+
+    // 7. SSE headers (ask_agent_ajax.php does not set them now).
+    //header('Content-Type: text/event-stream');
+    //header('Cache-Control: no-cache');
+    //header('Connection: keep-alive');
+    //header('X-Accel-Buffering: no');
+
+    //echo ": connected\n\n";
+    //if (ob_get_level() > 0) { ob_flush(); }
+    //flush();
+
+    // 8. cURL streaming request.
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL            => $full_url,
+        CURLOPT_POST           => true,
+        CURLOPT_HTTPHEADER     => [
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . $api_key,
+        ],
+        CURLOPT_POSTFIELDS     => json_encode($payload),
+        CURLOPT_RETURNTRANSFER => false,
+        CURLOPT_WRITEFUNCTION  => 'local_ai_functions_gpt5_stream_callback',
+        CURLOPT_TIMEOUT        => 0,
+        CURLOPT_CONNECTTIMEOUT => 30,
+        CURLOPT_LOW_SPEED_LIMIT=> 1,
+        CURLOPT_LOW_SPEED_TIME => 240,
+        CURLOPT_SSL_VERIFYPEER => true,
+    ]);
+
+    $ok       = curl_exec($ch);
+    $curl_err = curl_error($ch);
+    $http_code= curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    error_log("GPT5 STREAM HTTP CODE: " . $http_code);
+    if ($curl_err !== '') {
+        error_log("GPT5 STREAM CURL ERROR: " . $curl_err);
+    }
+
+    if ($ok === false || $curl_err !== '') {
+        echo "event: error\n";
+        echo "data: " . json_encode(['error' => 'cURL error', 'message' => $curl_err]) . "\n\n";
+        if (ob_get_level() > 0) { ob_flush(); }
+        flush();
+    } else if ($http_code !== 200) {
+        global $gpt5_stream_buffer;
+        error_log("GPT5 STREAM HTTP ERROR BODY: " . $gpt5_stream_buffer);
+
+        echo "event: error\n";
+        echo "data: " . json_encode([
+            'error'       => 'HTTP error',
+            'status_code' => $http_code,
+            'body'        => $gpt5_stream_buffer
+        ]) . "\n\n";
+        if (ob_get_level() > 0) { ob_flush(); }
+        flush();
+    }
+
+    // 9. Final done event.
+    echo "event: done\n";
+    echo "data: {}\n\n";
+    if (ob_get_level() > 0) { ob_flush(); }
+    flush();
+}
+
+/**
+ * cURL write callback for GPT-5 / Responses API streaming.
+ * Handles:
+ *  - event: response.output_text.delta  → delta (text chunk)
+ *  - event: response.completed         → done
+ *  - event: response.error             → error
+ */
+function local_ai_functions_gpt5_stream_callback($curl, string $data): int {
+    global $gpt5_stream_buffer;
+
+    $gpt5_stream_buffer .= $data;
+
+    while (($pos = strpos($gpt5_stream_buffer, "\n\n")) !== false) {
+        $event = substr($gpt5_stream_buffer, 0, $pos + 2);
+        $gpt5_stream_buffer = substr($gpt5_stream_buffer, $pos + 2);
+
+        if (trim($event) === '' || strpos($event, ':') === 0) {
+            continue;
+        }
+
+        error_log("GPT5 STREAM RAW EVENT: " . str_replace("\n", "\\n", $event));
+
+        if (!preg_match('/^event:\s*(.+)/m', $event, $event_matches)) {
+            continue;
+        }
+        $event_type = trim($event_matches[1]);
+
+        if (!preg_match('/^data:\s*(.+)/m', $event, $data_matches)) {
+            continue;
+        }
+        $json_data = trim($data_matches[1]);
+        $chunk     = json_decode($json_data, true);
+        if (!is_array($chunk)) {
+            error_log("GPT5 STREAM INVALID JSON CHUNK: " . $json_data);
+            continue;
+        }
+
+        switch ($event_type) {
+
+            case 'response.output_text.delta':
+                if (isset($chunk['delta']) && $chunk['delta'] !== '') {
+                    echo "event: chunk\n";
+                    echo "data: " . json_encode(['content' => $chunk['delta']]) . "\n\n";
+                    if (ob_get_level() > 0) { ob_flush(); }
+                    flush();
+                }
+                break;
+
+            case 'response.completed':
+                // Extract usage / completion info if present
+                $meta = [];
+
+                if (isset($chunk['response']['usage'])) {
+                    $meta['usage'] = $chunk['response']['usage'];
+                }
+                if (isset($chunk['response']['id'])) {
+                    $meta['response_id'] = $chunk['response']['id'];
+                }
+                if (isset($chunk['response']['finish_reason'])) {
+                    $meta['finish_reason'] = $chunk['response']['finish_reason'];
+                }
+
+                // Emit metadata event if we have anything
+                if (!empty($meta)) {
+                    echo "event: metadata\n";
+                    echo "data: " . json_encode($meta) . "\n\n";
+                    if (ob_get_level() > 0) { ob_flush(); }
+                    flush();
+                }
+
+                // Then emit done
+                echo "event: done\n";
+                echo "data: {}\n\n";
+                if (ob_get_level() > 0) { ob_flush(); }
+                flush();
+                break;
+
+            case 'response.error':
+                error_log("GPT5 STREAM RESPONSE.ERROR: " . json_encode($chunk));
+                echo "event: error\n";
+                echo "data: " . json_encode(['error' => 'API error', 'details' => $chunk]) . "\n\n";
+                if (ob_get_level() > 0) { ob_flush(); }
+                flush();
+                break;
+
+            // Ignore lifecycle events that don't carry text.
+            case 'response.created':
+            case 'response.in_progress':
+            case 'response.output_item.added':
+            case 'response.output_item.done':
+                break;
+
+            default:
+                error_log("GPT5 STREAM UNKNOWN EVENT TYPE: " . $event_type);
+                break;
+        }
+    }
+
+    return strlen($data);
+}
+
+	

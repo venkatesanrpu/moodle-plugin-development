@@ -1,0 +1,17 @@
+This the brief changelog in the plugin
+
+$plugin->version   = 2025090700
+1. The initial local-ai_functions plugin files were created.
+2. The correct database table to hold the endpoint and api keys.(mdl_local_ai_functions_agents)
+3. Initial blocks-ai_assistant files were created.
+
+$plugin->version   = 2025091101
+1. Added mdl_block_ai_assitant_history table added to store the user conversations and retrieval.
+2. Added modularity to the ajax function call by creating separate {functionCalled}_ajax.php
+3. Added common helper library lib.php in moodle/local/ai_functions folder to render the responses.
+4. Added history view options from the course page using Moodle URL activity.
+
+$plugin->version   = 2025091202 (block_ai_assistant-V3.7z)
+1. Solved bugs related to SQL insert to history table.
+2. Added pagination to history.mustache for better user experience
+3. Added subject and topic filter to history.php to view specific conversation history.

@@ -1,0 +1,280 @@
+<?php
+
+// blocks/ai_assistant/ajax/history_ajax.php
+
+define('AJAX_SCRIPT', true);
+
+require_once(__DIR__ . '/../../../config.php');
+
+global $DB, $USER;
+
+// Always return JSON.
+header('Content-Type: application/json; charset=utf-8');
+
+try {
+    // Must be logged in for any history actions.
+    require_login();
+    // Do not use require_sesskey() because the client sends JSON, not form-encoded.
+    // We'll validate sesskey from the JSON payload.
+
+    // Read JSON body.
+    $raw = file_get_contents('php://input');
+    $data = json_decode($raw, true);
+
+    if (!is_array($data)) {
+        throw new moodle_exception('invalidjson', 'error');
+    }
+
+    // Validate required top-level params.
+    $action   = clean_param($data['action']   ?? '', PARAM_ALPHA);
+    $courseid = clean_param($data['courseid'] ?? 0, PARAM_INT);
+    $sesskey  = clean_param($data['sesskey']  ?? '', PARAM_ALPHANUM);
+
+    if ($action === '') {
+        throw new moodle_exception('missingparam', 'error', '', 'action');
+    }
+    if (empty($courseid)) {
+        throw new moodle_exception('missingparam', 'error', '', 'courseid');
+    }
+    if ($sesskey === '' || !confirm_sesskey($sesskey)) {
+        throw new moodle_exception('invalidsesskey', 'error');
+    }
+
+    // Course-context security (course-based permissions).
+    // Use course object form to avoid the "participation" ambiguity.
+    $course = $DB->get_record('course', ['id' => $courseid], '*', MUST_EXIST);
+    require_login($course, false);
+
+    $context = context_course::instance($courseid);
+
+    // IMPORTANT: do NOT require moodle/course:view here (this triggers the "View courses without participation").
+    // Use a block capability you define in db/access.php.
+    require_capability('block/ai_assistant:use', $context);
+
+    // Actions.
+    switch ($action) {
+		
+		case 'lookup': {
+            $history = $data['history'] ?? null;
+            if (!is_array($history)) {
+                throw new moodle_exception('missingparam', 'error', '', 'history');
+            }
+
+            $usertext = clean_param($history['usertext'] ?? '', PARAM_RAW);
+            if (trim($usertext) === '') {
+                throw new moodle_exception('missingparam', 'error', '', 'history[usertext]');
+            }
+
+            // NOTE: userid is derived from session ($USER) - do not accept it from browser.
+            // Only return completed answers (non-empty botresponse).
+            $sql = "SELECT *
+                      FROM {block_ai_assistant_history}
+                     WHERE courseid = :courseid
+                       AND userid = :userid
+                       AND usertext = :usertext
+                       AND botresponse <> ''
+                  ORDER BY timemodified DESC";
+            $params = [
+                'courseid' => $courseid,
+                'userid' => $USER->id,
+                'usertext' => $usertext,
+            ];
+
+            $record = $DB->get_record_sql($sql, $params, IGNORE_MULTIPLE);
+
+            if ($record) {
+                echo json_encode([
+                    'status' => 'success',
+                    'hit' => true,
+                    'historyid' => (int)$record->id,
+                    'usertext' => $record->usertext,
+                    'botresponse' => $record->botresponse,
+                    'notice' => 'Fetched from history',
+                ]);
+            } else {
+                echo json_encode([
+                    'status' => 'success',
+                    'hit' => false,
+                ]);
+            }
+            break;
+        }
+
+
+        case 'create': {
+            $history = $data['history'] ?? null;
+            if (!is_array($history)) {
+                throw new moodle_exception('missingparam', 'error', '', 'history');
+            }
+
+            $record = new stdClass();
+            $record->courseid = $courseid;
+            $record->userid   = $USER->id;
+
+            // Text fields.
+            $record->usertext       = clean_param($history['usertext'] ?? '', PARAM_RAW);
+            $record->botresponse    = ''; // created empty, filled by update
+            $record->functioncalled = clean_param($history['functioncalled'] ?? 'ask_agent', PARAM_ALPHANUMEXT);
+
+            // Taxonomy fields (optional).
+            $record->subject = clean_param($history['subject'] ?? '', PARAM_TEXT);
+            $record->topic   = clean_param($history['topic'] ?? '', PARAM_TEXT);
+            $record->lesson  = clean_param($history['lesson'] ?? '', PARAM_TEXT);
+
+            // Metadata JSON (optional) - keep null/empty on create.
+            $record->metadata = null;
+
+            // Timestamps.
+            $record->timecreated  = time();
+            $record->timemodified = time();
+
+                            // Idempotency guard: if the same usertext already exists for this user+course,
+                // reuse it instead of inserting a duplicate row.
+                $existing = $DB->get_record('block_ai_assistant_history', [
+                    'courseid' => $courseid,
+                    'userid' => $USER->id,
+                    'usertext' => $record->usertext,
+                ], '*', IGNORE_MISSING);
+
+                if ($existing) {
+                    echo json_encode([
+                        'status' => 'success',
+                        'historyid' => (int)$existing->id,
+                        'message' => 'History exists (reused)',
+                    ]);
+                    break;
+                }
+
+                try {
+                    $historyid = $DB->insert_record('block_ai_assistant_history', $record, true);
+                } catch (dml_exception $e) {
+                    // Race condition fallback: if another request inserted the same unique key
+                    // between our check and insert, fetch and reuse the existing record.
+                    $existing = $DB->get_record('block_ai_assistant_history', [
+                        'courseid' => $courseid,
+                        'userid' => $USER->id,
+                        'usertext' => $record->usertext,
+                    ], '*', IGNORE_MISSING);
+
+                    if ($existing) {
+                        echo json_encode([
+                            'status' => 'success',
+                            'historyid' => (int)$existing->id,
+                            'message' => 'History exists (reused after race)',
+                        ]);
+                        break;
+                    }
+
+                    // If it's some other DB error, rethrow.
+                    throw $e;
+                }
+
+                if (empty($historyid)) {
+                    throw new moodle_exception('error', 'block_ai_assistant', '', null, 'Failed to create history');
+                }
+
+                echo json_encode([
+                    'status' => 'success',
+                    'historyid' => (int)$historyid,
+                    'message' => 'History created',
+                ]);
+                break;
+
+        }
+
+        case 'update': {
+            $historyid   = clean_param($data['historyid'] ?? 0, PARAM_INT);
+            $botresponse = clean_param($data['botresponse'] ?? '', PARAM_RAW);
+            $metadata    = $data['metadata'] ?? null;
+
+            if (empty($historyid)) {
+                throw new moodle_exception('missingparam', 'error', '', 'historyid');
+            }
+
+            // Ownership check (prevents updating others' records).
+            $record = $DB->get_record('block_ai_assistant_history', [
+                'id'     => $historyid,
+                'courseid' => $courseid,
+                'userid' => $USER->id,
+            ], '*', MUST_EXIST);
+
+            $record->botresponse  = $botresponse;
+            $record->timemodified = time();
+
+            // Store metadata as JSON if provided.
+            if (!empty($metadata)) {
+                // Ensure JSON string stored.
+                $record->metadata = json_encode($metadata);
+            }
+
+            $DB->update_record('block_ai_assistant_history', $record);
+
+            echo json_encode([
+                'status'  => 'success',
+                'message' => 'History updated',
+            ]);
+            break;
+        }
+
+        case 'list': {
+            // Return last 50 items for this user+course.
+            $records = $DB->get_records(
+                'block_ai_assistant_history',
+                ['courseid' => $courseid, 'userid' => $USER->id],
+                'timecreated DESC',
+                '*',
+                0,
+                50
+            );
+
+            $history = [];
+            foreach ($records as $r) {
+                $history[] = [
+                    'id'            => (int)$r->id,
+                    'usertext'       => $r->usertext,
+                    'botresponse'    => $r->botresponse,
+                    'functioncalled' => $r->functioncalled,
+                    'subject'        => $r->subject,
+                    'topic'          => $r->topic,
+                    'lesson'         => $r->lesson,
+                    'metadata'       => !empty($r->metadata) ? json_decode($r->metadata, true) : null,
+                    'timecreated'    => (int)$r->timecreated,
+                    'timemodified'   => (int)$r->timemodified,
+                ];
+            }
+
+            echo json_encode([
+                'status' => 'success',
+                'history' => $history,
+                'count' => count($history),
+            ]);
+            break;
+        }
+
+        default:
+            throw new moodle_exception('invalidparameter', 'error', '', 'action');
+    }
+
+} catch (required_capability_exception $e) {
+    // Permission issue: 403.
+    http_response_code(403);
+    echo json_encode([
+        'status'  => 'error',
+        'message' => $e->getMessage(),
+    ]);
+} catch (moodle_exception $e) {
+    // Moodle exception: 400.
+    http_response_code(400);
+    echo json_encode([
+        'status'  => 'error',
+        'message' => $e->getMessage(),
+        'errorcode' => $e->errorcode,
+    ]);
+} catch (Throwable $e) {
+    // Unexpected: 500.
+    http_response_code(500);
+    echo json_encode([
+        'status'  => 'error',
+        'message' => $e->getMessage(),
+    ]);
+}
