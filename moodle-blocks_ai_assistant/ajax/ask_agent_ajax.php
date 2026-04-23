@@ -5,7 +5,7 @@ ob_implicit_flush(true);
 
 define('AJAX_SCRIPT', true);
 require_once(__DIR__ . '/../../../config.php');
-//require_once($CFG->dirroot . '/local/ai_functions/lib5.php');
+//require_once($CFG->dirroot . '/local/ai_functions/lib_llama_agent.php');
 require_once($CFG->dirroot . '/local/ai_functions/libagent.php');
 //require_once($CFG->dirroot . '/local/ai_functions/libparallel.php');
 global $DB;
@@ -75,18 +75,18 @@ try {
         $prompt_template
     );
 
-/* //phi-4 model and model-router setting
+/*//phi-4 model and model-router setting
 	$payload = [
         'messages' => [
             ['role' => 'system', 'content' => $system_prompt],
             ['role' => 'user', 'content' => "Generate study notes for: {$usertext}"]
         ],
         'stream' => true,
-        'max_tokens' => 2048,      // Increased for comprehensive notes
-        'temperature' => 0.4,
-        'top_p' => 0.9,
-        'presence_penalty' => 0.6,
-        'frequency_penalty' => 0.8
+        'max_tokens' => 4096      // Increased for comprehensive notes
+        //'temperature' => 0.4,
+        //'top_p' => 0.9,
+        //'presence_penalty' => 0.6,
+        //'frequency_penalty' => 0.8
     ];
 */
 	
@@ -103,6 +103,7 @@ try {
 	],
     ];
 */
+
 //parallel api payload
 $payload = [
     'model' => 'speed',
