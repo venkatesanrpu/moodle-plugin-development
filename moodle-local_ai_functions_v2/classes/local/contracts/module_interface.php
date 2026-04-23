@@ -6,7 +6,7 @@ namespace local_ai_functions_v2\local\contracts;
 defined('MOODLE_INTERNAL') || die();
 
 /**
- * Contract for function modules such as ask_agent and mcq.
+ * Contract for function modules such as notes_agent and mcq_agent.
  */
 interface module_interface {
     /**

@@ -43,14 +43,14 @@ class local_ai_functions_v2_edit_form extends moodleform {
                 ],
             ],
             'functions' => [
-                'ask_agent' => [
-                    'module' => 'ask_agent',
+                'notes_agent' => [
+                    'module' => 'notes_agent',
                     'provider' => 'notes_provider',
                     'model' => 'mistral-large-3',
                     'stream' => true,
                 ],
-                'mcq' => [
-                    'module' => 'mcq',
+                'mcq_agent' => [
+                    'module' => 'mcq_agent',
                     'provider' => 'mcq_provider',
                     'model' => 'gpt-4.1',
                     'stream' => false,
@@ -96,7 +96,7 @@ class local_ai_functions_v2_edit_form extends moodleform {
             return $errors;
         }
 
-        foreach (['ask_agent', 'mcq'] as $requiredfunction) {
+        foreach (['notes_agent', 'mcq_agent'] as $requiredfunction) {
             if (empty($config['functions'][$requiredfunction])) {
                 $errors['configdata'] = get_string('requiredfunctionmissing', 'local_ai_functions_v2', $requiredfunction);
                 return $errors;

@@ -4,7 +4,7 @@ A Moodle local plugin that stores AI agent definitions securely and routes funct
 
 ## Initial scope
 
-- `ask_agent` for study notes and similar long-form responses.
+- `notes_agent` for study notes and similar long-form responses.
 - `mcq` for structured exam-style question generation.
 
 ## Design goals
@@ -33,16 +33,16 @@ A Moodle local plugin that stores AI agent definitions securely and routes funct
     }
   },
   "functions": {
-    "ask_agent": {
-      "module": "ask_agent",
+    "notes_agent": {
+      "module": "notes_agent",
       "provider": "notes_provider",
       "model": "mistral-large-3",
       "stream": true,
       "max_output_tokens": 4000,
       "temperature": 0.3
     },
-    "mcq": {
-      "module": "mcq",
+    "mcq_agent": {
+      "module": "mcq_agent",
       "provider": "mcq_provider",
       "model": "gpt-4.1",
       "stream": false,
@@ -63,7 +63,7 @@ local_ai_functions_v2_call_endpoint($agentkey, $functionkey, $payload);
 
 ## Normalised payload examples
 
-### ask_agent
+### notes_agent
 
 ```php
 [
