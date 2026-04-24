@@ -109,44 +109,85 @@ define(['core/ajax', 'core/notification'], function(Ajax, Notification) {
     };
 
     const normalizeLessons = lessons => {
-        if (!Array.isArray(lessons)) {
-            return [];
-        }
-        return lessons.map(item => typeof item === 'string' ? {key: item, label: item} : item);
+        if (!Array.isArray(lessons)) return [];
+        return lessons.map(item => {
+            if (typeof item === 'string') return {key: item, label: item};
+            // Shape A: { lesson, lesson_key }
+            if (item.lesson !== undefined) {
+                return {key: item.lesson_key || item.lesson, label: item.lesson};
+            }
+            // Generic: { key/id, label/name }
+            return {
+                key:   item.key   || item.id   || item.name  || item.label || '',
+                label: item.label || item.name || item.key   || item.id    || ''
+            };
+        });
     };
 
     const normalizeTopics = topics => {
-        if (Array.isArray(topics)) {
-            return topics.map(item => ({
-                key: item.key || item.id || item.name || item.label,
-                label: item.label || item.name || item.key || item.id,
-                lessons: normalizeLessons(item.lessons || [])
+        if (!Array.isArray(topics)) {
+            // Generic keyed object
+            return Object.keys(topics || {}).map(k => ({
+                key:     k,
+                label:   (topics[k] && (topics[k].label || topics[k].name)) || k,
+                lessons: normalizeLessons((topics[k] && topics[k].lessons) || [])
             }));
         }
-        return Object.keys(topics || {}).map(key => ({
-            key: key,
-            label: (topics[key] && (topics[key].label || topics[key].name)) || key,
-            lessons: normalizeLessons((topics[key] && topics[key].lessons) || [])
-        }));
+        return topics.map(item => {
+            // Shape A: { topic, topic_key, lessons }
+            if (item.topic !== undefined) {
+                return {
+                    key:     item.topic_key || item.topic,
+                    label:   item.topic,
+                    lessons: normalizeLessons(item.lessons || [])
+                };
+            }
+            // Generic
+            return {
+                key:     item.key   || item.id   || item.name  || item.label || '',
+                label:   item.label || item.name || item.key   || item.id    || '',
+                lessons: normalizeLessons(item.lessons || [])
+            };
+        });
     };
 
     const normalizeSyllabus = raw => {
-        if (!raw) {
-            return [];
-        }
+        if (!raw) return [];
+
+        // Shape B: array — each element is a subject (Shape A or generic)
         if (Array.isArray(raw)) {
-            return raw.map(item => ({
-                key: item.key || item.id || item.name || item.label,
-                label: item.label || item.name || item.key || item.id,
-                topics: normalizeTopics(item.topics || [])
-            }));
+            return raw.map(item => {
+                if (item.subject !== undefined) {
+                    return {
+                        key:    item.subject_key || item.subject,
+                        label:  item.subject,
+                        topics: normalizeTopics(item.topics || [])
+                    };
+                }
+                return {
+                    key:    item.key   || item.id   || item.name  || item.label || '',
+                    label:  item.label || item.name || item.key   || item.id    || '',
+                    topics: normalizeTopics(item.topics || [])
+                };
+            });
         }
-        if (Array.isArray(raw.subjects)) {
-            return normalizeSyllabus(raw.subjects);
+
+        // Shape C: { subjects: [...] }
+        if (Array.isArray(raw.subjects)) return normalizeSyllabus(raw.subjects);
+
+        // Shape A: single-subject object { subject, subject_key, topics }
+        if (raw.subject !== undefined) {
+            return [{
+                key:    raw.subject_key || raw.subject,
+                label:  raw.subject,
+                topics: normalizeTopics(raw.topics || [])
+            }];
         }
+
+        // Shape E: generic keyed object (legacy)
         return Object.keys(raw).map(key => ({
-            key: key,
-            label: (raw[key] && (raw[key].label || raw[key].name)) || key,
+            key:    key,
+            label:  (raw[key] && (raw[key].label || raw[key].name)) || key,
             topics: normalizeTopics((raw[key] && raw[key].topics) || {})
         }));
     };
