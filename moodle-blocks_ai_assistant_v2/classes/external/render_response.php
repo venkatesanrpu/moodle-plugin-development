@@ -1,20 +1,19 @@
 <?php
-// This file is part of Moodle - http://moodle.org/
-//
-// Moodle is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-
 /**
- * External function: render_response
+ * render_response external function.
  *
- * Fetches raw botresponse from DB by historyid, runs it through
- * render_helper::render() (Parsedown + math protection + clean_text),
- * and returns the sanitised HTML string.
+ * Called by widget.js renderNode() after save_history() to convert the stored
+ * raw markdown+LaTeX botresponse into safe rendered HTML.
  *
- * Security: verifies the requesting user owns the history row and
- * is enrolled in the associated course.
+ * phase7_6e fix:
+ *   - Uses history_repository::get_record() (NOT raw $DB->get_record with TABLE const)
+ *     because history_repository resolves the correct table name dynamically
+ *     (handles both 'block_ai_assistant_v2_history' and 'block_ai_assistant_history').
+ *   - Uses IGNORE_MISSING — never throws MUST_EXIST exception on historyid mismatch.
+ *   - Uses render_helper::render() which uses strip_tags() NOT clean_text/HTMLPurifier.
+ *     Backslashes in \( \[ survive intact → MathJax can typeset them.
+ *
+ * Returns: {html: string} — safe HTML, ready for node.innerHTML assignment.
  *
  * @package   block_ai_assistant_v2
  * @copyright 2026
@@ -25,49 +24,59 @@ namespace block_ai_assistant_v2\external;
 
 defined('MOODLE_INTERNAL') || die();
 
-require_once($CFG->libdir . '/externallib.php');
-
-use external_api;
-use external_function_parameters;
-use external_value;
-use external_single_structure;
-use context_course;
 use block_ai_assistant_v2\local\render_helper;
+use block_ai_assistant_v2\local\history_repository;
+use context_course;
+use core_external\external_api;
+use core_external\external_function_parameters;
+use core_external\external_single_structure;
+use core_external\external_value;
 
 class render_response extends external_api {
 
     public static function execute_parameters(): external_function_parameters {
         return new external_function_parameters([
-            'historyid' => new external_value(PARAM_INT, 'History row ID'),
-            'courseid'  => new external_value(PARAM_INT, 'Course ID for context check'),
+            'historyid' => new external_value(PARAM_INT, 'History record ID'),
+            'courseid'  => new external_value(PARAM_INT, 'Course ID'),
         ]);
     }
 
     public static function execute(int $historyid, int $courseid): array {
-        global $DB, $USER;
+        global $USER;
 
-        // Validate parameters.
-        ['historyid' => $historyid, 'courseid' => $courseid] =
-            self::validate_parameters(self::execute_parameters(), [
-                'historyid' => $historyid,
-                'courseid'  => $courseid,
-            ]);
+        $params = self::validate_parameters(self::execute_parameters(), [
+            'historyid' => $historyid,
+            'courseid'  => $courseid,
+        ]);
 
-        // Security: validate course context and enrollment.
-        $context = context_course::instance($courseid);
+        $context = context_course::instance($params['courseid']);
         self::validate_context($context);
-        require_capability('block/ai_assistant_v2:view', $context);
+        require_capability('block/ai_assistant_v2:use', $context);
 
-        // Fetch the history row — must belong to this user and course.
-        $row = $DB->get_record('block_ai_assistant_v2_history', [
-            'id'       => $historyid,
-            'userid'   => (int)$USER->id,
-            'courseid' => $courseid,
-        ], 'id, botresponse', MUST_EXIST);
+        // Use history_repository::get_record() — resolves correct table name
+        // dynamically (supports both v2 and legacy table names).
+        // IGNORE_MISSING means no exception if record not found.
+        $record = history_repository::get_record(
+            [
+                'id'       => $params['historyid'],
+                'userid'   => $USER->id,
+                'courseid' => $params['courseid'],
+            ],
+            'id, botresponse',
+            IGNORE_MISSING
+        );
 
-        $raw = (string)($row->botresponse ?? '');
+        if (!$record) {
+            return ['html' => ''];
+        }
 
-        // Render: math-safe Markdown → sanitised HTML.
+        $raw = trim((string)$record->botresponse);
+
+        // Strip chain-of-thought blocks before rendering.
+        $raw = preg_replace('/<think>[\s\S]*?<\/think>/is', '', $raw);
+
+        // render_helper::render() uses strip_tags() NOT clean_text/HTMLPurifier.
+        // Backslashes \( \[ survive intact — MathJax delimiters are preserved.
         $html = render_helper::render($raw);
 
         return ['html' => $html];
