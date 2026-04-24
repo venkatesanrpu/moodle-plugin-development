@@ -16,12 +16,12 @@
 /**
  * History panel for block_ai_assistant_v2.
  *
- * Phase 7_6f — key changes:
- *   1. renderHistoryItem() AJAX call is REMOVED entirely.
- *   2. History items are rendered on the server (get_history returns
- *      item.renderedhtml) and injected directly via innerHTML — no
- *      extra round-trip, no MUST_EXIST race, no typing-indicator flash.
- *   3. typesetMath() uses the centralised mathjax_helper module.
+ * Phase 7_6h — fixes init() to accept a CONTEXT OBJECT passed by
+ * $PAGE->requires->js_call_amd(..., [$context]).
+ *
+ * Also retains Phase 7_6f changes:
+ *   - renderHistoryItem() AJAX removed; server pre-renders via get_history.
+ *   - typesetMath() uses centralised mathjax_helper module.
  *
  * @module     block_ai_assistant_v2/history
  * @copyright  2024 Your Name
@@ -45,18 +45,15 @@ const SEL = {
 
 // ─── Module state ─────────────────────────────────────────────────────────────
 
-let rootEl    = null;
-let courseId  = 0;
-let page      = 0;
+let rootEl     = null;
+let courseId   = 0;
+let page       = 0;
 let totalPages = 1;
 
 // ─── Render a single history item from pre-fetched data ───────────────────────
 
 /**
  * Inject pre-rendered HTML from item.renderedhtml into answerNode.
- *
- * No AJAX call is made here — the HTML was rendered on the server
- * inside get_history::execute() using render_helper::render().
  *
  * @param {HTMLElement} answerNode  The collapsible answer div.
  * @param {Object}      item        History item object from get_history.
@@ -66,8 +63,6 @@ const renderFromItem = (answerNode, item) => {
     answerNode.innerHTML = html
         ? html
         : '<em style="color:var(--bs-secondary)">(No response stored.)</em>';
-
-    // Phase 7_6f: MathJax 3.x — typeset after innerHTML is set.
     typesetMath(answerNode);
 };
 
@@ -76,11 +71,11 @@ const renderFromItem = (answerNode, item) => {
 /**
  * Render the list of history cards into the history panel.
  *
- * @param {Array}  items       Array of history item objects.
+ * @param {Array} items  Array of history item objects.
  */
 const renderList = (items) => {
-    const panel   = rootEl.querySelector(SEL.HISTORY_PANEL);
-    const listEl  = panel ? panel.querySelector(SEL.HISTORY_LIST) : null;
+    const panel  = rootEl.querySelector(SEL.HISTORY_PANEL);
+    const listEl = panel ? panel.querySelector(SEL.HISTORY_LIST) : null;
     if (!listEl) {
         return;
     }
@@ -88,34 +83,29 @@ const renderList = (items) => {
     listEl.innerHTML = '';
 
     if (!items || items.length === 0) {
-        listEl.innerHTML =
-            '<p class="text-muted p-2">No history found.</p>';
+        listEl.innerHTML = '<p class="text-muted p-2">No history found.</p>';
         return;
     }
 
     items.forEach((item) => {
-        const card = document.createElement('div');
+        const card  = document.createElement('div');
         card.classList.add('blockaiassistantv2-historycard');
         card.dataset.historyid = item.id;
 
-        // Question row (acts as accordion toggle).
         const qNode = document.createElement('div');
         qNode.classList.add('blockaiassistantv2-historyq');
         qNode.style.cursor = 'pointer';
         qNode.textContent = item.usertext || '(no question)';
 
-        // Answer row (hidden by default, expanded on click).
         const aNode = document.createElement('div');
         aNode.classList.add('blockaiassistantv2-historya');
         aNode.hidden = true;
         aNode.dataset.rendered = '0';
 
-        // Click: toggle answer panel and inject HTML on first open.
         qNode.addEventListener('click', () => {
             aNode.hidden = !aNode.hidden;
             if (!aNode.hidden && aNode.dataset.rendered === '0') {
                 aNode.dataset.rendered = '1';
-                // Phase 7_6f: inline render — zero AJAX, no typing flash.
                 renderFromItem(aNode, item);
             }
         });
@@ -138,7 +128,7 @@ const loadHistory = (generalOnly = false) => {
     const listEl = panel ? panel.querySelector(SEL.HISTORY_LIST) : null;
     if (listEl) {
         listEl.innerHTML =
-            '<p class="text-muted p-2"><i class="fa fa-spinner fa-spin"></i> Loading…</p>';
+            '<p class="text-muted p-2"><i class="fa fa-spinner fa-spin"></i> Loading\u2026</p>';
     }
 
     Ajax.call([{
@@ -153,7 +143,7 @@ const loadHistory = (generalOnly = false) => {
     .then((result) => {
         totalPages = result.totalpages || 1;
         updatePagination();
-        renderList(result.items || [], {courseid: courseId});
+        renderList(result.items || []);
         return result;
     })
     .catch((err) => {
@@ -168,11 +158,8 @@ const loadHistory = (generalOnly = false) => {
 
 // ─── Pagination ───────────────────────────────────────────────────────────────
 
-/**
- * Update pagination button states and page-info label.
- */
 const updatePagination = () => {
-    const panel    = rootEl.querySelector(SEL.HISTORY_PANEL);
+    const panel = rootEl.querySelector(SEL.HISTORY_PANEL);
     if (!panel) {
         return;
     }
@@ -194,22 +181,38 @@ const updatePagination = () => {
 // ─── Initialisation ───────────────────────────────────────────────────────────
 
 /**
- * Bind history panel controls. Called from widget.js after the block root is
- * located, or directly from the Mustache template.
+ * Initialise the history panel.
  *
- * @param {HTMLElement} blockRootEl  The .blockaiassistantv2-root element.
- * @param {number}      cId         Course ID.
+ * Phase 7_6h fix: accepts the context object passed by js_call_amd:
+ *   $PAGE->requires->js_call_amd('block_ai_assistant_v2/history', 'init', [$context]);
+ *
+ * $context is serialised by Moodle as a plain JS object:
+ *   { uniqid, courseid, sesskey, streamurl, agentkey, mainsubjectkey, ... }
+ *
+ * @param {Object} ctx  Context object from block_ai_assistant_v2.php.
  */
-const init = (blockRootEl, cId) => {
-    rootEl   = blockRootEl;
-    courseId = cId;
+const init = (ctx) => {
+
+    // ── Phase 7_6h: resolve from context object ───────────────────────────
+    if (!ctx || typeof ctx !== 'object') {
+        return;
+    }
+
+    courseId = parseInt(ctx.courseid, 10) || 0;
+    const uniqid = ctx.uniqid || '';
+
+    const rootWrapper = uniqid ? document.getElementById(uniqid) : null;
+    if (!rootWrapper) {
+        return;
+    }
+    rootEl = rootWrapper;
+    // ──────────────────────────────────────────────────────────────────────
 
     const panel = rootEl.querySelector(SEL.HISTORY_PANEL);
     if (!panel) {
         return;
     }
 
-    // Refresh button.
     const refreshBtn = panel.querySelector(SEL.REFRESH_BTN);
     if (refreshBtn) {
         refreshBtn.addEventListener('click', () => {
@@ -219,7 +222,6 @@ const init = (blockRootEl, cId) => {
         });
     }
 
-    // General-only checkbox.
     const generalCb = panel.querySelector(SEL.GENERAL_ONLY_CB);
     if (generalCb) {
         generalCb.addEventListener('change', () => {
@@ -228,7 +230,6 @@ const init = (blockRootEl, cId) => {
         });
     }
 
-    // Previous page button.
     const prevBtn = panel.querySelector(SEL.PREV_BTN);
     if (prevBtn) {
         prevBtn.addEventListener('click', () => {
@@ -240,7 +241,6 @@ const init = (blockRootEl, cId) => {
         });
     }
 
-    // Next page button.
     const nextBtn = panel.querySelector(SEL.NEXT_BTN);
     if (nextBtn) {
         nextBtn.addEventListener('click', () => {
@@ -252,8 +252,6 @@ const init = (blockRootEl, cId) => {
         });
     }
 
-    // Load first page automatically when the panel becomes visible.
-    // MutationObserver watches for `hidden` attribute removal.
     const observer = new MutationObserver(() => {
         if (!panel.hidden) {
             page = 0;

@@ -16,15 +16,18 @@
 /**
  * Main chat widget for block_ai_assistant_v2.
  *
- * Phase 7_6g — fixes "rootEl.querySelector is not a function" by making
- * init() accept EITHER a DOM element OR an ID-suffix string.
+ * Phase 7_6h — fixes init() to accept a CONTEXT OBJECT passed by
+ * $PAGE->requires->js_call_amd(..., [$context]).
  *
- * Rendering pipeline (live chat):
- *   SSE stream → chunks appended as raw text (typing effect)
- *   → on [DONE] → Ajax call to render_response webservice
- *   → PHP renders Markdown+Math via render_helper::render()
- *   → result set as innerHTML on answerNode
- *   → typesetMath(answerNode) called here in JS
+ * Root cause of "rootEl.querySelector is not a function":
+ *   block_ai_assistant_v2.php passes the full $context array to js_call_amd.
+ *   Moodle serialises this as a JS plain object {uniqid, courseid, sesskey...}.
+ *   Previous versions of init() expected a string or HTMLElement — not an
+ *   object — so rootEl ended up being the plain object, and .querySelector
+ *   threw a TypeError.
+ *
+ * Fix: init() now reads all values directly from the context object and
+ * locates the DOM wrapper via context.uniqid.
  *
  * @module     block_ai_assistant_v2/widget
  * @copyright  2024 Your Name
@@ -51,7 +54,6 @@ const SEL = {
     GUIDED_PANEL:  '[data-region="guided-search"]',
     HISTORY_PANEL: '[data-region="history-panel"]',
     MCQ_PANEL:     '[data-region="mcq-panel"]',
-    STREAM_URL:    '[data-streamurl]',
 };
 
 // ─── Module state ─────────────────────────────────────────────────────────────
@@ -80,7 +82,10 @@ const appendMessage = (role, text, isHtml = false) => {
     const body  = rootEl.querySelector(SEL.CHAT_BODY);
     const wrap  = rootEl.querySelector(SEL.MSG_WRAPPER);
     const msgEl = document.createElement('div');
-    msgEl.classList.add('blockaiassistantv2-message', `blockaiassistantv2-message--${role}`);
+    msgEl.classList.add(
+        'blockaiassistantv2-message',
+        `blockaiassistantv2-message--${role}`
+    );
     if (isHtml) {
         msgEl.innerHTML = text;
     } else {
@@ -144,13 +149,11 @@ const renderComplete = (answerNode, historyId) => {
     .then((result) => {
         if (result && result.html) {
             answerNode.innerHTML = result.html;
-            // Phase 7_6g: use centralised MathJax 3 typesetting helper.
             typesetMath(answerNode);
         }
         return result;
     })
     .catch((err) => {
-        // Fallback: leave streaming text in place, log error.
         // eslint-disable-next-line no-console
         window.console.error('[AI Assistant] renderComplete AJAX error:', err);
     })
@@ -174,14 +177,11 @@ const startStream = (prompt) => {
     isStreaming = true;
     setInputDisabled(true);
 
-    // Append user bubble.
     appendMessage('user', prompt);
 
-    // Prepare assistant bubble (will be populated by SSE chunks).
     const answerNode = appendMessage('assistant', '');
     setTyping(true);
 
-    // Build stream URL query string.
     const params = new URLSearchParams({
         sesskey:     sesskey,
         courseid:    courseId,
@@ -211,7 +211,6 @@ const startStream = (prompt) => {
         try {
             const parsed = JSON.parse(data);
 
-            // First message carries metadata.
             if (firstChunk) {
                 firstChunk = false;
                 setTyping(false);
@@ -231,7 +230,6 @@ const startStream = (prompt) => {
                 answerNode.scrollIntoView({behavior: 'smooth', block: 'end'});
             }
         } catch (err) {
-            // Non-JSON chunk — treat as raw text.
             rawBuffer += data;
             answerNode.textContent = rawBuffer;
         }
@@ -251,9 +249,6 @@ const startStream = (prompt) => {
 
 // ─── Send handler ─────────────────────────────────────────────────────────────
 
-/**
- * Handle send button click / Enter keypress.
- */
 const handleSend = () => {
     const inputEl = rootEl.querySelector(SEL.INPUT);
     if (!inputEl) {
@@ -269,66 +264,55 @@ const handleSend = () => {
 
 // ─── Panel toggle helpers ─────────────────────────────────────────────────────
 
-/**
- * Toggle a side panel and hide the others.
- *
- * @param {string} activeRegion  data-region value of the panel to show.
- */
 const togglePanel = (activeRegion) => {
     [SEL.GUIDED_PANEL, SEL.HISTORY_PANEL, SEL.MCQ_PANEL].forEach((sel) => {
         const el = rootEl.querySelector(sel);
         if (!el) {
             return;
         }
-        const region = el.dataset.region;
-        el.hidden = (region !== activeRegion) ? true : !el.hidden;
+        el.hidden = (el.dataset.region !== activeRegion) ? true : !el.hidden;
     });
 };
 
 // ─── Initialisation ───────────────────────────────────────────────────────────
 
 /**
- * Initialise the widget for a given block instance.
+ * Initialise the widget.
  *
- * Phase 7_6g fix: accepts EITHER a DOM element OR an ID-suffix string.
+ * Called by block_ai_assistant_v2.php via:
+ *   $PAGE->requires->js_call_amd('block_ai_assistant_v2/widget', 'init', [$context]);
  *
- * Mustache may call this as:
- *   w.init('{{uniqid}}')                                  ← string ID suffix
- *   w.init(document.getElementById('blockaiassistantv2{{uniqid}}'))  ← element
+ * Moodle serialises $context (a PHP array) as a plain JS object:
+ *   { uniqid, courseid, sesskey, streamurl, agentkey, mainsubjectkey, ... }
  *
- * Both forms are handled safely — no more "querySelector is not a function".
+ * Phase 7_6h fix: init() reads all values from the context object directly,
+ * then locates the DOM wrapper by the uniqid string.
  *
- * @param {string|HTMLElement} instanceIdOrEl  ID suffix string OR the wrapper element.
+ * @param {Object} ctx  Context object from block_ai_assistant_v2.php.
  */
-const init = (instanceIdOrEl) => {
+const init = (ctx) => {
 
-    // ── Phase 7_6g: resolve rootWrapper from either a string or an element ──
-    let rootWrapper;
-
-    if (typeof instanceIdOrEl === 'string') {
-        // Called with an ID suffix, e.g. init('{{uniqid}}').
-        rootWrapper = document.getElementById('blockaiassistantv2' + instanceIdOrEl);
-    } else if (instanceIdOrEl instanceof HTMLElement) {
-        // Called with the element directly, e.g. init(document.getElementById(...)).
-        rootWrapper = instanceIdOrEl;
-    } else {
-        // Nothing usable — bail silently.
+    // ── Phase 7_6h: read from context object ──────────────────────────────
+    if (!ctx || typeof ctx !== 'object') {
         return;
     }
 
+    const uniqid = ctx.uniqid || '';
+    courseId     = parseInt(ctx.courseid, 10)  || 0;
+    sesskey      = ctx.sesskey                 || '';
+    streamUrl    = ctx.streamurl               || '';
+    agentKey     = ctx.agentkey                || '';
+    mainSubject  = ctx.mainsubjectkey          || '';
+    // ──────────────────────────────────────────────────────────────────────
+
+    // The Mustache template wraps everything in an element whose id = uniqid.
+    // rootEl is the inner chat-shell; fall back to the wrapper itself.
+    const rootWrapper = uniqid ? document.getElementById(uniqid) : null;
     if (!rootWrapper) {
         return;
     }
-    // ────────────────────────────────────────────────────────────────────────
 
-    // rootEl is the inner chat-shell region; fall back to rootWrapper itself
-    // so querySelector calls still work even if data-region is on the wrapper.
-    rootEl      = rootWrapper.querySelector(SEL.ROOT) || rootWrapper;
-    courseId    = parseInt(rootWrapper.dataset.courseid, 10);
-    sesskey     = rootWrapper.dataset.sesskey     || '';
-    streamUrl   = rootWrapper.dataset.streamurl   || '';
-    agentKey    = rootWrapper.dataset.agentkey    || '';
-    mainSubject = rootWrapper.dataset.mainsubjectkey || '';
+    rootEl = rootWrapper.querySelector(SEL.ROOT) || rootWrapper;
 
     // Launcher button (opens the shell).
     const launcherBtn = rootWrapper.querySelector(SEL.LAUNCHER);
