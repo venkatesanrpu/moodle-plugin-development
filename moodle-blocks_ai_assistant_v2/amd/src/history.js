@@ -1,3 +1,4 @@
+// phase7_6b: typesetMath() updated with polling retry — mirrors widget.js pattern.
 define(['core/ajax', 'core/notification'], function(Ajax, Notification) {
     const state = {};
     const q = (root, selector) => root.querySelector(selector);
@@ -10,13 +11,21 @@ define(['core/ajax', 'core/notification'], function(Ajax, Notification) {
     };
 
     /**
-     * typesetMath — run MathJax v4 on a node after innerHTML is set.
-     * window.MathJax is guaranteed by block_ai_assistant_v2.php plain-script load.
+     * typesetMath — re-typeset a DOM node using Moodle's native MathJax 3.
+     * Polls up to ~3 s (10 x 300 ms) to handle async filter_mathjaxloader init.
+     *
+     * @param {Element} node
      */
-    const typesetMath = node => {
-        if (window.MathJax && window.MathJax.typesetPromise) {
-            window.MathJax.typesetPromise([node]).catch(() => { /* silent */ });
-        }
+    const typesetMath = (node) => {
+        if (!node) { return; }
+        const attempt = (tries) => {
+            if (window.MathJax && window.MathJax.typesetPromise) {
+                window.MathJax.typesetPromise([node]).catch(() => { /* silent */ });
+            } else if (tries > 0) {
+                setTimeout(() => attempt(tries - 1), 300);
+            }
+        };
+        attempt(10);
     };
 
     /**
@@ -57,13 +66,11 @@ define(['core/ajax', 'core/notification'], function(Ajax, Notification) {
             card.className = 'block_ai_assistant_v2-historycard';
             card.dataset.historyid = item.id;
 
-            // Question row — always visible, click to expand/collapse answer.
             const qNode = document.createElement('div');
             qNode.className = 'block_ai_assistant_v2-historyq';
             qNode.textContent = item.usertext || '';
             qNode.style.cursor = 'pointer';
 
-            // Answer row — hidden by default, lazy-rendered on first expand.
             const aNode = document.createElement('div');
             aNode.className = 'block_ai_assistant_v2-historya';
             aNode.hidden = true;
@@ -72,7 +79,6 @@ define(['core/ajax', 'core/notification'], function(Ajax, Notification) {
             card.appendChild(qNode);
             card.appendChild(aNode);
 
-            // Expand/collapse; trigger render_response only on first open.
             qNode.addEventListener('click', () => {
                 aNode.hidden = !aNode.hidden;
                 if (!aNode.hidden && aNode.dataset.rendered === '0') {
@@ -87,23 +93,23 @@ define(['core/ajax', 'core/notification'], function(Ajax, Notification) {
 
     const getFilters = root => ({
         subject: q(root, '[data-region="subject-select"]').value || '',
-        topic: q(root, '[data-region="topic-select"]').value || '',
-        lesson: q(root, '[data-region="lesson-select"]').value || '',
+        topic:   q(root, '[data-region="topic-select"]').value   || '',
+        lesson:  q(root, '[data-region="lesson-select"]').value  || '',
         general: !!q(root, '[data-region="history-general"]').checked
     });
 
     const loadHistory = root => {
-        const ctx = state[root.id].context;
+        const ctx    = state[root.id].context;
         const params = state[root.id];
         const filters = getFilters(root);
         return Ajax.call([{methodname: 'block_ai_assistant_v2_get_history', args: {
             courseid: Number(ctx.courseid),
-            page: params.page,
-            perpage: params.perpage,
-            subject: filters.subject,
-            topic: filters.topic,
-            lesson: filters.lesson,
-            general: filters.general
+            page:     params.page,
+            perpage:  params.perpage,
+            subject:  filters.subject,
+            topic:    filters.topic,
+            lesson:   filters.lesson,
+            general:  filters.general
         }}])[0].then(result => {
             state[root.id].last = result;
             renderList(root, result.items || []);
@@ -112,47 +118,32 @@ define(['core/ajax', 'core/notification'], function(Ajax, Notification) {
     };
 
     const bind = root => {
-        const panel = q(root, '[data-region="history-panel"]');
-        const toggle = q(root, '[data-action="toggle-history"]');
+        const panel   = q(root, '[data-region="history-panel"]');
+        const toggle  = q(root, '[data-action="toggle-history"]');
         const refresh = q(root, '[data-action="refresh-history"]');
-        const prev = q(root, '[data-action="history-prev"]');
-        const next = q(root, '[data-action="history-next"]');
+        const prev    = q(root, '[data-action="history-prev"]');
+        const next    = q(root, '[data-action="history-next"]');
         const subject = q(root, '[data-region="subject-select"]');
-        const topic = q(root, '[data-region="topic-select"]');
-        const lesson = q(root, '[data-region="lesson-select"]');
+        const topic   = q(root, '[data-region="topic-select"]');
+        const lesson  = q(root, '[data-region="lesson-select"]');
         const general = q(root, '[data-region="history-general"]');
 
         toggle.addEventListener('click', () => {
             panel.hidden = !panel.hidden;
-            if (!panel.hidden) {
-                state[root.id].page = 1;
-                loadHistory(root);
-            }
+            if (!panel.hidden) { state[root.id].page = 1; loadHistory(root); }
         });
-        refresh.addEventListener('click', () => {
-            state[root.id].page = 1;
-            loadHistory(root);
-        });
+        refresh.addEventListener('click', () => { state[root.id].page = 1; loadHistory(root); });
         prev.addEventListener('click', () => {
-            if (state[root.id].page > 1) {
-                state[root.id].page -= 1;
-                loadHistory(root);
-            }
+            if (state[root.id].page > 1) { state[root.id].page -= 1; loadHistory(root); }
         });
         next.addEventListener('click', () => {
             const last = state[root.id].last;
-            if (last && last.hasnext) {
-                state[root.id].page += 1;
-                loadHistory(root);
-            }
+            if (last && last.hasnext) { state[root.id].page += 1; loadHistory(root); }
         });
 
         [subject, topic, lesson, general].forEach(node => {
             node.addEventListener('change', () => {
-                if (!panel.hidden) {
-                    state[root.id].page = 1;
-                    loadHistory(root);
-                }
+                if (!panel.hidden) { state[root.id].page = 1; loadHistory(root); }
             });
         });
     };
@@ -160,9 +151,7 @@ define(['core/ajax', 'core/notification'], function(Ajax, Notification) {
     return {
         init: context => {
             const root = document.getElementById(context.uniqid);
-            if (!root) {
-                return;
-            }
+            if (!root) { return; }
             state[root.id] = {context: context, page: 1, perpage: 10, last: null};
             bind(root);
         }
