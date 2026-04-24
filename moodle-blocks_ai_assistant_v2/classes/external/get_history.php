@@ -1,25 +1,14 @@
 <?php
-// This file is part of Moodle - http://moodle.org/
-//
-// Moodle is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// Moodle is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
-
 /**
  * External function: get_history
  *
- * Phase 7_6f — adds pre-rendered HTML field so JS needs zero extra AJAX
- * calls when loading history items. Eliminates the MUST_EXIST race
- * condition and the typing-indicator flash on history click.
+ * Phase 7_6j fixes:
+ *   - FATAL BUG: Wrong use statements. Was using pre-Moodle4 bare class names
+ *     (external_api, external_value etc.) inside a namespace, which resolved to
+ *     block_ai_assistant_v2\external\external_api → class not found → fatal.
+ *     Fixed: all external classes now use core_external\ namespace.
+ *   - FATAL BUG: core_text::strlen() called without use \core_text → fatal.
+ *     Fixed: using \core_text::strlen() with fully-qualified name.
  *
  * @package    block_ai_assistant_v2
  * @copyright  2024 Your Name
@@ -30,43 +19,25 @@ namespace block_ai_assistant_v2\external;
 
 defined('MOODLE_INTERNAL') || die();
 
-require_once($CFG->libdir . '/externallib.php');
-
-use external_api;
-use external_function_parameters;
-use external_value;
-use external_single_structure;
-use external_multiple_structure;
 use block_ai_assistant_v2\local\render_helper;
+use context_course;
+use core_external\external_api;
+use core_external\external_function_parameters;
+use core_external\external_value;
+use core_external\external_single_structure;
+use core_external\external_multiple_structure;
 
-/**
- * Returns paginated chat history for the current user / course.
- */
 class get_history extends external_api {
 
-    /**
-     * Parameter definition.
-     *
-     * @return external_function_parameters
-     */
     public static function execute_parameters(): external_function_parameters {
         return new external_function_parameters([
-            'courseid'   => new external_value(PARAM_INT,  'Course ID'),
+            'courseid'    => new external_value(PARAM_INT,  'Course ID'),
             'generalonly' => new external_value(PARAM_BOOL, 'General (non-course) history only', VALUE_DEFAULT, false),
-            'page'       => new external_value(PARAM_INT,  'Page number (0-based)', VALUE_DEFAULT, 0),
-            'perpage'    => new external_value(PARAM_INT,  'Items per page',        VALUE_DEFAULT, 20),
+            'page'        => new external_value(PARAM_INT,  'Page number (0-based)', VALUE_DEFAULT, 0),
+            'perpage'     => new external_value(PARAM_INT,  'Items per page', VALUE_DEFAULT, 20),
         ]);
     }
 
-    /**
-     * Execute the function.
-     *
-     * @param  int  $courseid
-     * @param  bool $generalonly
-     * @param  int  $page
-     * @param  int  $perpage
-     * @return array
-     */
     public static function execute(
         int  $courseid,
         bool $generalonly = false,
@@ -75,7 +46,6 @@ class get_history extends external_api {
     ): array {
         global $DB, $USER;
 
-        // Validate parameters.
         $params = self::validate_parameters(self::execute_parameters(), [
             'courseid'    => $courseid,
             'generalonly' => $generalonly,
@@ -83,11 +53,10 @@ class get_history extends external_api {
             'perpage'     => $perpage,
         ]);
 
-        // Validate context.
-        $context = \context_course::instance($params['courseid']);
+        $context = context_course::instance($params['courseid']);
         self::validate_context($context);
+        require_capability('block/ai_assistant_v2:use', $context);
 
-        // Build query conditions.
         $conditions = ['userid' => $USER->id];
         if ($params['generalonly']) {
             $conditions['courseid'] = 0;
@@ -110,16 +79,15 @@ class get_history extends external_api {
             $usertext    = (string)($record->usertext    ?? '');
             $botresponse = (string)($record->botresponse ?? '');
 
-            // Build preview text (first 80 chars of bot response, no HTML).
+            // Build plain-text preview (first 80 chars, no HTML).
             $preview = strip_tags($botresponse);
             $preview = preg_replace('/\s+/', ' ', trim($preview));
-            if (core_text::strlen($preview) > 80) {
-                $preview = core_text::substr($preview, 0, 80) . '…';
+            // FIX: use fully-qualified \core_text to avoid namespace resolution fatal.
+            if (\core_text::strlen($preview) > 80) {
+                $preview = \core_text::substr($preview, 0, 80) . '…';
             }
 
-            // Phase 7_6f: Pre-render at fetch time so JS does not need a
-            // second AJAX call per history item. renderedhtml is set once here
-            // and injected directly via innerHTML in history.js.
+            // Pre-render at fetch time — JS injects directly, no second AJAX call.
             $renderedhtml = render_helper::render($botresponse);
 
             $items[] = [
@@ -134,19 +102,14 @@ class get_history extends external_api {
         }
 
         return [
-            'items'    => $items,
-            'total'    => $total,
-            'page'     => $params['page'],
-            'perpage'  => $params['perpage'],
+            'items'      => $items,
+            'total'      => $total,
+            'page'       => $params['page'],
+            'perpage'    => $params['perpage'],
             'totalpages' => $perpage > 0 ? (int)ceil($total / $params['perpage']) : 1,
         ];
     }
 
-    /**
-     * Return structure definition.
-     *
-     * @return external_single_structure
-     */
     public static function execute_returns(): external_single_structure {
         return new external_single_structure([
             'items' => new external_multiple_structure(
@@ -154,10 +117,10 @@ class get_history extends external_api {
                     'id'           => new external_value(PARAM_INT,  'Record ID'),
                     'usertext'     => new external_value(PARAM_RAW,  'User question'),
                     'botresponse'  => new external_value(PARAM_RAW,  'Raw LLM response'),
-                    'renderedhtml' => new external_value(PARAM_RAW,  'Pre-rendered HTML (Markdown+Math)'),
+                    'renderedhtml' => new external_value(PARAM_RAW,  'Pre-rendered HTML'),
                     'previewtext'  => new external_value(PARAM_TEXT, 'Plain text preview'),
                     'timecreated'  => new external_value(PARAM_INT,  'Unix timestamp'),
-                    'courseid'     => new external_value(PARAM_INT,  'Course ID (0 = general)'),
+                    'courseid'     => new external_value(PARAM_INT,  'Course ID'),
                 ])
             ),
             'total'      => new external_value(PARAM_INT, 'Total record count'),
