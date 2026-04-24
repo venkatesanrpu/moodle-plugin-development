@@ -16,7 +16,8 @@
 /**
  * Main chat widget for block_ai_assistant_v2.
  *
- * Phase 7_6f — uses centralised mathjax_helper for typesetting.
+ * Phase 7_6g — fixes "rootEl.querySelector is not a function" by making
+ * init() accept EITHER a DOM element OR an ID-suffix string.
  *
  * Rendering pipeline (live chat):
  *   SSE stream → chunks appended as raw text (typing effect)
@@ -36,34 +37,34 @@ import typesetMath from 'block_ai_assistant_v2/mathjax_helper';
 // ─── Selectors ───────────────────────────────────────────────────────────────
 
 const SEL = {
-    ROOT:         '[data-region="chat-shell"]',
-    CHAT_BODY:    '.blockaiassistantv2-body',
-    INPUT:        '.blockaiassistantv2-input',
-    SEND_BTN:     '[data-action="send"]',
-    CLOSE_BTN:    '[data-action="close-chat"]',
-    LAUNCHER:     '[data-action="open-chat"]',
-    TYPING_IMG:   '.blockaiassistantv2-typing',
-    MSG_WRAPPER:  '.blockaiassistantv2-messages',
-    GUIDED_BTN:   '[data-action="toggle-guided"]',
-    HISTORY_BTN:  '[data-action="toggle-history"]',
-    MCQ_BTN:      '[data-action="toggle-mcq"]',
-    GUIDED_PANEL: '[data-region="guided-search"]',
-    HISTORY_PANEL:'[data-region="history-panel"]',
-    MCQ_PANEL:    '[data-region="mcq-panel"]',
-    STREAM_URL:   '[data-streamurl]',
+    ROOT:          '[data-region="chat-shell"]',
+    CHAT_BODY:     '.blockaiassistantv2-body',
+    INPUT:         '.blockaiassistantv2-input',
+    SEND_BTN:      '[data-action="send"]',
+    CLOSE_BTN:     '[data-action="close-chat"]',
+    LAUNCHER:      '[data-action="open-chat"]',
+    TYPING_IMG:    '.blockaiassistantv2-typing',
+    MSG_WRAPPER:   '.blockaiassistantv2-messages',
+    GUIDED_BTN:    '[data-action="toggle-guided"]',
+    HISTORY_BTN:   '[data-action="toggle-history"]',
+    MCQ_BTN:       '[data-action="toggle-mcq"]',
+    GUIDED_PANEL:  '[data-region="guided-search"]',
+    HISTORY_PANEL: '[data-region="history-panel"]',
+    MCQ_PANEL:     '[data-region="mcq-panel"]',
+    STREAM_URL:    '[data-streamurl]',
 };
 
 // ─── Module state ─────────────────────────────────────────────────────────────
 
-let rootEl       = null;
-let courseId     = 0;
-let sesskey      = '';
-let streamUrl    = '';
-let agentKey     = '';
-let mainSubject  = '';
+let rootEl        = null;
+let courseId      = 0;
+let sesskey       = '';
+let streamUrl     = '';
+let agentKey      = '';
+let mainSubject   = '';
 let activeFilters = {};
-let eventSource  = null;
-let isStreaming   = false;
+let eventSource   = null;
+let isStreaming    = false;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -112,8 +113,8 @@ const setTyping = (show) => {
  * @param {boolean} disabled
  */
 const setInputDisabled = (disabled) => {
-    const inputEl  = rootEl.querySelector(SEL.INPUT);
-    const sendBtn  = rootEl.querySelector(SEL.SEND_BTN);
+    const inputEl = rootEl.querySelector(SEL.INPUT);
+    const sendBtn = rootEl.querySelector(SEL.SEND_BTN);
     if (inputEl) {
         inputEl.disabled = disabled;
     }
@@ -143,7 +144,7 @@ const renderComplete = (answerNode, historyId) => {
     .then((result) => {
         if (result && result.html) {
             answerNode.innerHTML = result.html;
-            // Phase 7_6f: use centralised MathJax 3 typesetting helper.
+            // Phase 7_6g: use centralised MathJax 3 typesetting helper.
             typesetMath(answerNode);
         }
         return result;
@@ -193,9 +194,9 @@ const startStream = (prompt) => {
     const url = `${streamUrl}?${params.toString()}`;
     eventSource = new EventSource(url);
 
-    let historyId    = null;
-    let rawBuffer    = '';
-    let firstChunk   = true;
+    let historyId  = null;
+    let rawBuffer  = '';
+    let firstChunk = true;
 
     eventSource.onmessage = (e) => {
         const data = e.data;
@@ -238,8 +239,8 @@ const startStream = (prompt) => {
 
     eventSource.onerror = () => {
         eventSource.close();
-        eventSource  = null;
-        isStreaming  = false;
+        eventSource = null;
+        isStreaming = false;
         setTyping(false);
         setInputDisabled(false);
         if (!rawBuffer) {
@@ -289,27 +290,45 @@ const togglePanel = (activeRegion) => {
 /**
  * Initialise the widget for a given block instance.
  *
- * Called from the Mustache template via:
- *   require(['block_ai_assistant_v2/widget'], function(w) { w.init(instanceId); });
+ * Phase 7_6g fix: accepts EITHER a DOM element OR an ID-suffix string.
  *
- * @param {string} instanceId  The block instance root element ID suffix.
+ * Mustache may call this as:
+ *   w.init('{{uniqid}}')                                  ← string ID suffix
+ *   w.init(document.getElementById('blockaiassistantv2{{uniqid}}'))  ← element
+ *
+ * Both forms are handled safely — no more "querySelector is not a function".
+ *
+ * @param {string|HTMLElement} instanceIdOrEl  ID suffix string OR the wrapper element.
  */
-const init = (instanceId) => {
-    const rootWrapper = document.getElementById(`blockaiassistantv2${instanceId}`);
+const init = (instanceIdOrEl) => {
+
+    // ── Phase 7_6g: resolve rootWrapper from either a string or an element ──
+    let rootWrapper;
+
+    if (typeof instanceIdOrEl === 'string') {
+        // Called with an ID suffix, e.g. init('{{uniqid}}').
+        rootWrapper = document.getElementById('blockaiassistantv2' + instanceIdOrEl);
+    } else if (instanceIdOrEl instanceof HTMLElement) {
+        // Called with the element directly, e.g. init(document.getElementById(...)).
+        rootWrapper = instanceIdOrEl;
+    } else {
+        // Nothing usable — bail silently.
+        return;
+    }
+
     if (!rootWrapper) {
         return;
     }
+    // ────────────────────────────────────────────────────────────────────────
 
-    rootEl      = rootWrapper.querySelector(SEL.ROOT);
+    // rootEl is the inner chat-shell region; fall back to rootWrapper itself
+    // so querySelector calls still work even if data-region is on the wrapper.
+    rootEl      = rootWrapper.querySelector(SEL.ROOT) || rootWrapper;
     courseId    = parseInt(rootWrapper.dataset.courseid, 10);
-    sesskey     = rootWrapper.dataset.sesskey;
-    streamUrl   = rootWrapper.dataset.streamurl;
+    sesskey     = rootWrapper.dataset.sesskey     || '';
+    streamUrl   = rootWrapper.dataset.streamurl   || '';
     agentKey    = rootWrapper.dataset.agentkey    || '';
     mainSubject = rootWrapper.dataset.mainsubjectkey || '';
-
-    if (!rootEl) {
-        return;
-    }
 
     // Launcher button (opens the shell).
     const launcherBtn = rootWrapper.querySelector(SEL.LAUNCHER);
