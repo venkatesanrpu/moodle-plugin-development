@@ -1,4 +1,4 @@
-// phase7_6c: Fix streaming sequence — typing indicator shown BEFORE stream starts,
+// phase7_6d: Fix streaming sequence (phase7_6c) + 3-state MathJax guard — typing indicator shown BEFORE stream starts,
 //            NOT injected between the streamed text and the rendered HTML.
 //
 // Bug in phase7_6b:
@@ -26,16 +26,54 @@ define(['core/ajax', 'core/notification'], function(Ajax, Notification) {
      *
      * @param {Element} node
      */
+    /**
+     * typesetMath — re-typeset a DOM node using window.MathJax (MathJax v3).
+     *
+     * phase7_6d: upgraded to 3-state guard.
+     * window.MathJax is populated by Moodle's filter_mathjaxloader.
+     * Do NOT use require(['core/mathjax']) — that AMD shim returns undefined,
+     * not the MathJax API object. window.MathJax is the correct reference.
+     *
+     * States:
+     *   a) MathJax ready              → call typesetPromise() immediately.
+     *   b) MathJax startup pending    → wait for startup.promise then call.
+     *   c) MathJax not yet injected   → poll every 200 ms up to 5 s.
+     *
+     * @param {Element} node
+     */
     const typesetMath = (node) => {
         if (!node) { return; }
-        const attempt = (tries) => {
-            if (window.MathJax && window.MathJax.typesetPromise) {
+
+        // State (a): fully initialised.
+        if (window.MathJax && typeof window.MathJax.typesetPromise === 'function') {
+            window.MathJax.typesetPromise([node]).catch(() => {});
+            return;
+        }
+
+        // State (b): object exists but startup not yet complete.
+        if (window.MathJax && window.MathJax.startup && window.MathJax.startup.promise) {
+            window.MathJax.startup.promise.then(() => {
                 window.MathJax.typesetPromise([node]).catch(() => {});
-            } else if (tries > 0) {
-                setTimeout(() => attempt(tries - 1), 300);
+            });
+            return;
+        }
+
+        // State (c): MathJax script not yet injected — poll up to 5 s.
+        let attempts = 0;
+        const timer = setInterval(() => {
+            attempts++;
+            if (window.MathJax && typeof window.MathJax.typesetPromise === 'function') {
+                clearInterval(timer);
+                window.MathJax.typesetPromise([node]).catch(() => {});
+            } else if (window.MathJax && window.MathJax.startup && window.MathJax.startup.promise) {
+                clearInterval(timer);
+                window.MathJax.startup.promise.then(() => {
+                    window.MathJax.typesetPromise([node]).catch(() => {});
+                });
+            } else if (attempts >= 25) { // 25 × 200 ms = 5 s
+                clearInterval(timer);
             }
-        };
-        attempt(10);
+        }, 200);
     };
 
     /**

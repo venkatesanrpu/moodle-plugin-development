@@ -1,30 +1,23 @@
 <?php
-// This file is part of Moodle - http://moodle.org/
-//
-// Moodle is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-
 /**
  * Render helper: Markdown + Math-safe pipeline for AI responses.
  *
- * Pipeline:
- *   1. Extract math spans (protect ALL four delimiter styles from Parsedown)
- *   2. Run Parsedown (Markdown → HTML)
- *   3. Restore math spans verbatim
- *   4. Sanitise with Moodle's clean_text()
+ * phase7_6d changes:
+ *   - REMOVED clean_text() / HTMLPurifier — it encoded backslashes inside text
+ *     nodes, destroying \( \[ MathJax delimiters before they reached the browser.
+ *   - REPLACED with strip_tags() allowlist + manual on/javascript: scrub.
+ *     strip_tags() does NOT touch text-node content → backslashes survive intact.
+ *   - render() is now the single canonical rendering function used by both
+ *     the live-chat path (render_response.php) and history pre-rendering
+ *     (get_history.php). No second AJAX round-trip required.
  *
- * phase7_6b changes:
- *   - Placeholder tokens now use unique boundary markers (%%AIMATH_N%%) that
- *     are guaranteed not to appear in real markdown or HTML — avoids accidental
- *     str_replace collisions with Parsedown output.
- *   - Regex order: display delimiters (greedy) before inline (non-greedy).
- *   - \[...\] and \(...\) patterns fixed: PHP double-quoted string escaping
- *     was silently stripping one backslash level, breaking the regex match.
- *     Now uses single-quoted strings + explicit preg_quote-safe patterns.
- *   - $...$ single-dollar pattern tightened: no newlines, not adjacent to
- *     another $, minimum 1 non-space character inside.
+ * Pipeline:
+ *   1. Strip <think>…</think> chain-of-thought blocks.
+ *   2. Extract math spans → opaque placeholders (protect from Parsedown).
+ *   3. Parsedown: Markdown → HTML.
+ *   4. Restore math placeholders verbatim.
+ *   5. strip_tags() with allowlist  (text nodes, incl. \( \[, UNTOUCHED).
+ *   6. Regex scrub of on* event attrs and javascript:/data: href/src values.
  *
  * @package   block_ai_assistant_v2
  * @copyright 2026
@@ -40,6 +33,20 @@ require_once(__DIR__ . '/Parsedown.php');
 class render_helper {
 
     /**
+     * Tags emitted by Parsedown that are safe to keep.
+     * strip_tags() removes everything NOT in this list,
+     * but leaves text-node content (including backslashes) untouched.
+     */
+    private const SAFE_TAGS =
+        '<p><br><strong><b><em><i><u><s><del><ins>' .
+        '<h1><h2><h3><h4><h5><h6>' .
+        '<ul><ol><li><dl><dt><dd>' .
+        '<blockquote><pre><code><kbd><samp><var>' .
+        '<table><thead><tbody><tfoot><tr><th><td><caption>' .
+        '<a><img><hr><sup><sub><mark><abbr><span><div>' .
+        '<details><summary>';
+
+    /**
      * Render raw LLM markdown (with LaTeX) into safe HTML.
      *
      * @param string $raw  Raw markdown text from LLM / DB botresponse column.
@@ -50,19 +57,20 @@ class render_helper {
             return '';
         }
 
-        // ── Step 1: extract and protect math expressions ─────────────────
+        // ── Step 1: strip chain-of-thought blocks ─────────────────────────
+        $raw = preg_replace('/<think>[\s\S]*?<\/think>/is', '', $raw);
+
+        // ── Step 2: extract and protect math expressions ──────────────────
         $placeholders = [];
         $counter      = 0;
+        $protected    = self::extract_math($raw, $placeholders, $counter);
 
-        $protected = self::extract_math($raw, $placeholders, $counter);
-
-        // ── Step 2: Parsedown — Markdown → HTML ───────────────────────────
+        // ── Step 3: Parsedown — Markdown → HTML ───────────────────────────
         $pd = new \Parsedown();
-        $pd->setSafeMode(false); // XSS cleaned by clean_text() in Step 4.
+        $pd->setSafeMode(false); // XSS handled in steps 5-6 below.
         $html = $pd->text($protected);
 
-        // ── Step 3: restore math placeholders verbatim ───────────────────
-        // Use str_replace with arrays for a single-pass replacement.
+        // ── Step 4: restore math placeholders verbatim ────────────────────
         if (!empty($placeholders)) {
             $html = str_replace(
                 array_keys($placeholders),
@@ -71,68 +79,83 @@ class render_helper {
             );
         }
 
-        // ── Step 4: sanitise with Moodle's XSS cleaner ───────────────────
-        // clean_text() strips dangerous tags/attributes but preserves
-        // \(...\) and \[...\] verbatim (they contain no HTML).
-        $html = clean_text($html, FORMAT_HTML);
+        // ── Step 5: strip_tags() with allowlist ───────────────────────────
+        // KEY FIX: strip_tags() does NOT encode text-node content.
+        // HTMLPurifier (used by clean_text()) was entity-encoding backslashes
+        // inside text nodes, turning \( into &#92;( and breaking MathJax.
+        $html = strip_tags($html, self::SAFE_TAGS);
+
+        // ── Step 6: scrub dangerous attribute patterns ────────────────────
+        // Remove on* event handlers (onclick, onload, onerror, etc.)
+        $html = preg_replace(
+            '/\s+on\w+\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]*)/i',
+            '',
+            $html
+        );
+        // Neutralise javascript: and data: in href / src attributes.
+        $html = preg_replace(
+            '/(\s+(?:href|src)\s*=\s*["\']?)\s*(?:javascript|data)\s*:/i',
+            '$1#',
+            $html
+        );
 
         return $html;
     }
 
     /**
-     * Extract math expressions, replace with opaque placeholders.
+     * Extract math expressions and replace with opaque placeholders.
      *
-     * Pattern priority (longest/display first, then inline):
-     *   1. \[...\]   — display math   (multiline OK)
-     *   2. $$...$$   — display math   (multiline OK)
-     *   3. \(...\)   — inline math    (multiline OK)
-     *   4. $...$     — inline math    (single line, non-ambiguous)
+     * Pattern priority (display first, then inline):
+     *   1. \[...\]   display math  (multiline OK)
+     *   2. $$...$$   display math  (multiline OK)
+     *   3. \(...\)   inline math   (multiline OK)
+     *   4. $...$     inline math   (single-line, non-ambiguous)
      *
-     * Placeholders look like: %%AIMATH_0%%  %%AIMATH_1%%  etc.
-     * The %% fences ensure they survive Parsedown unchanged.
+     * Placeholders: %%AIMATH_N%%  — survive Parsedown and strip_tags() unchanged.
      *
      * @param string $text          Input markdown.
      * @param array  &$placeholders Map: placeholder → original expression.
      * @param int    &$counter      Running counter for unique keys.
      * @return string               Text with math replaced by placeholders.
      */
-    private static function extract_math(string $text, array &$placeholders, int &$counter): string {
+    private static function extract_math(
+        string $text,
+        array  &$placeholders,
+        int    &$counter
+    ): string {
 
-        $store = function(string $math) use (&$placeholders, &$counter): string {
+        $store = static function(string $math) use (&$placeholders, &$counter): string {
             $key = '%%AIMATH_' . $counter . '%%';
             $placeholders[$key] = $math;
             $counter++;
             return $key;
         };
 
-        // 1. Display: \[...\]  — note single-quoted strings to avoid PHP eating backslashes.
-        //    Regex: literal backslash + '[' ... literal backslash + ']', multiline content.
+        // 1. Display \[...\]
         $text = preg_replace_callback(
             '/\\\\\[(.+?)\\\\\]/s',
-            fn($m) => $store($m[0]),
+            static fn($m) => $store($m[0]),
             $text
         );
 
-        // 2. Display: $$...$$  (must come before single-$ to avoid partial matches).
+        // 2. Display $$...$$
         $text = preg_replace_callback(
             '/\$\$(.+?)\$\$/s',
-            fn($m) => $store($m[0]),
+            static fn($m) => $store($m[0]),
             $text
         );
 
-        // 3. Inline: \(...\)
+        // 3. Inline \(...\)
         $text = preg_replace_callback(
             '/\\\\\((.+?)\\\\\)/s',
-            fn($m) => $store($m[0]),
+            static fn($m) => $store($m[0]),
             $text
         );
 
-        // 4. Inline: $...$
-        //    Rules: not preceded/followed by $, at least one non-space char inside,
-        //    no newlines inside (avoids catching paragraph breaks as math).
+        // 4. Inline $...$  (no newlines, not adjacent to another $)
         $text = preg_replace_callback(
             '/(?<!\$)\$(?!\$)(\S[^\n$]*?\S|\S)\$(?!\$)/',
-            fn($m) => $store($m[0]),
+            static fn($m) => $store($m[0]),
             $text
         );
 
