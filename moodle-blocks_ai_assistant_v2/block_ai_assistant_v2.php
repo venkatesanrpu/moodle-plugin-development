@@ -4,6 +4,7 @@ defined('MOODLE_INTERNAL') || die();
 use block_ai_assistant_v2\local\syllabus_repository;
 
 class block_ai_assistant_v2 extends block_base {
+
     public function init(): void {
         $this->title = get_string('pluginname', 'block_ai_assistant_v2');
     }
@@ -23,8 +24,8 @@ class block_ai_assistant_v2 extends block_base {
             return $this->content;
         }
 
-        $this->content = new stdClass();
-        $this->content->text = '';
+        $this->content         = new stdClass();
+        $this->content->text   = '';
         $this->content->footer = '';
 
         $agentkey = !empty($this->config->agent_key)
@@ -36,20 +37,21 @@ class block_ai_assistant_v2 extends block_base {
             : ((string)get_config('block_ai_assistant_v2', 'mainsubjectkey') ?: 'general');
 
         $context = [
-            'uniqid' => html_writer::random_id('block_ai_assistant_v2'),
-            'courseid' => (int)$COURSE->id,
+            'uniqid'          => html_writer::random_id('block_ai_assistant_v2'),
+            'courseid'        => (int)$COURSE->id,
             'blockinstanceid' => (int)$this->instance->id,
-            'sesskey' => sesskey(),
-            'agentkey' => $agentkey,
-            'mainsubjectkey' => $mainsubjectkey,
+            'sesskey'         => sesskey(),
+            'agentkey'        => $agentkey,
+            'mainsubjectkey'  => $mainsubjectkey,
             'courseshortname' => format_string($COURSE->shortname),
-            'streamurl' => (new moodle_url('/blocks/ai_assistant_v2/stream.php'))->out(false),
+            'streamurl'       => (new moodle_url('/blocks/ai_assistant_v2/stream.php'))->out(false),
         ];
 
         $PAGE->requires->css('/blocks/ai_assistant_v2/styles.css');
-        $PAGE->requires->js_call_amd('block_ai_assistant_v2/widget', 'init', [$context]);
+        $PAGE->requires->js_call_amd('block_ai_assistant_v2/widget',  'init', [$context]);
         $PAGE->requires->js_call_amd('block_ai_assistant_v2/history', 'init', [$context]);
-        $PAGE->requires->js_call_amd('block_ai_assistant_v2/mcq', 'init', [$context]);
+        $PAGE->requires->js_call_amd('block_ai_assistant_v2/mcq',     'init', [$context]);
+
         $this->content->text = $OUTPUT->render_from_template('block_ai_assistant_v2/main', $context);
 
         return $this->content;
@@ -59,18 +61,43 @@ class block_ai_assistant_v2 extends block_base {
         return false;
     }
 
+    /**
+     * Save instance configuration and persist syllabus data.
+     *
+     * Note: parent::instance_config_save() is declared void in Moodle 5.x
+     * (moodleblock.class.php).  Do NOT capture its return value — doing so
+     * causes a TypeError when PHP evaluates void-returning calls in bool context.
+     *
+     * $data contains the raw submitted form values (config_* keys stripped of
+     * the "config_" prefix by block_edit_form before this method is called).
+     *
+     * @param stdClass $data   Submitted and validated form data (already normalised).
+     * @param bool     $nolongerused  Legacy parameter, unused.
+     * @return bool
+     */
     public function instance_config_save($data, $nolongerused = false): bool {
-        $result = parent::instance_config_save($data, $nolongerused);
+        // Let Moodle core persist the standard block config fields first.
+        parent::instance_config_save($data, $nolongerused);
 
-        $agentkey = !empty($this->config->agent_key)
-            ? (string)$this->config->agent_key
+        // Read values from $data (the normalised submitted object, not $this->config,
+        // which may not yet reflect the new values at this point).
+        $agentkey = !empty($data->agent_key)
+            ? (string)$data->agent_key
             : ((string)get_config('block_ai_assistant_v2', 'agent_key') ?: 'default');
-        $mainsubjectkey = !empty($this->config->mainsubjectkey)
-            ? (string)$this->config->mainsubjectkey
-            : ((string)get_config('block_ai_assistant_v2', 'mainsubjectkey') ?: 'general');
-        $syllabusjson = isset($this->config->syllabusjson) ? (string)$this->config->syllabusjson : '[]';
 
-        syllabus_repository::upsert_for_block((int)$this->instance->id, $agentkey, $mainsubjectkey, $syllabusjson);
-        return $result;
+        $mainsubjectkey = !empty($data->mainsubjectkey)
+            ? (string)$data->mainsubjectkey
+            : ((string)get_config('block_ai_assistant_v2', 'mainsubjectkey') ?: 'general');
+
+        $syllabusjson = isset($data->syllabusjson) ? (string)$data->syllabusjson : '[]';
+
+        syllabus_repository::upsert_for_block(
+            (int)$this->instance->id,
+            $agentkey,
+            $mainsubjectkey,
+            $syllabusjson
+        );
+
+        return true;
     }
 }
