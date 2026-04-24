@@ -21,7 +21,8 @@ define(['core/ajax', 'core/notification'], function(Ajax, Notification) {
             (question.options || []).forEach(option => {
                 const label = document.createElement('label');
                 label.className = 'block_ai_assistant_v2-mcqoption';
-                label.innerHTML = '<input type="radio" name="mcq-' + question.number + '" value="' + option.label + '"> <span><strong>' + option.label + '.</strong> ' + option.text + '</span>';
+                label.innerHTML ='<input type="radio" name="mcq-' + question.number + '" value="' + option.label + '">' +
+                ' <span><strong>' + option.label + '.</strong> ' +option.text +'</span>';
                 options.appendChild(label);
             });
 
@@ -59,6 +60,8 @@ define(['core/ajax', 'core/notification'], function(Ajax, Notification) {
             body.appendChild(card);
         });
     };
+
+
 
     const generate = root => {
         const ctx = state[root.id].context;

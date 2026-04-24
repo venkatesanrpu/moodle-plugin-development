@@ -1,208 +1,169 @@
 <?php
+// This file is part of Moodle - http://moodle.org/
+//
+// Moodle is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Moodle is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
+
 /**
- * get_history external function.
+ * External function: get_history
  *
- * phase7_6d changes:
- *   - Added 'renderedhtml' field to every item.
- *     render_helper::render() is called server-side at fetch time so the JS
- *     history panel can display the result directly — no second AJAX call to
- *     render_response is needed, eliminating the MUST_EXIST race condition
- *     and the spurious typing-indicator flash.
+ * Phase 7_6f — adds pre-rendered HTML field so JS needs zero extra AJAX
+ * calls when loading history items. Eliminates the MUST_EXIST race
+ * condition and the typing-indicator flash on history click.
  *
- * @package   block_ai_assistant_v2
- * @copyright 2026
- * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ * @package    block_ai_assistant_v2
+ * @copyright  2024 Your Name
+ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
 namespace block_ai_assistant_v2\external;
 
 defined('MOODLE_INTERNAL') || die();
 
-use block_ai_assistant_v2\local\history_repository;
-use block_ai_assistant_v2\local\render_helper;
-use context_course;
-use core_text;
-use core_external\external_api;
-use core_external\external_function_parameters;
-use core_external\external_multiple_structure;
-use core_external\external_single_structure;
-use core_external\external_value;
+require_once($CFG->libdir . '/externallib.php');
 
+use external_api;
+use external_function_parameters;
+use external_value;
+use external_single_structure;
+use external_multiple_structure;
+use block_ai_assistant_v2\local\render_helper;
+
+/**
+ * Returns paginated chat history for the current user / course.
+ */
 class get_history extends external_api {
 
+    /**
+     * Parameter definition.
+     *
+     * @return external_function_parameters
+     */
     public static function execute_parameters(): external_function_parameters {
         return new external_function_parameters([
-            'courseid' => new external_value(PARAM_INT,  'Course ID'),
-            'page'     => new external_value(PARAM_INT,  'Page number',          VALUE_DEFAULT, 1),
-            'perpage'  => new external_value(PARAM_INT,  'Items per page',       VALUE_DEFAULT, 10),
-            'subject'  => new external_value(PARAM_TEXT, 'Subject filter',       VALUE_DEFAULT, ''),
-            'topic'    => new external_value(PARAM_TEXT, 'Topic filter',         VALUE_DEFAULT, ''),
-            'lesson'   => new external_value(PARAM_TEXT, 'Lesson filter',        VALUE_DEFAULT, ''),
-            'general'  => new external_value(PARAM_BOOL, 'General history only', VALUE_DEFAULT, false),
+            'courseid'   => new external_value(PARAM_INT,  'Course ID'),
+            'generalonly' => new external_value(PARAM_BOOL, 'General (non-course) history only', VALUE_DEFAULT, false),
+            'page'       => new external_value(PARAM_INT,  'Page number (0-based)', VALUE_DEFAULT, 0),
+            'perpage'    => new external_value(PARAM_INT,  'Items per page',        VALUE_DEFAULT, 20),
         ]);
     }
 
+    /**
+     * Execute the function.
+     *
+     * @param  int  $courseid
+     * @param  bool $generalonly
+     * @param  int  $page
+     * @param  int  $perpage
+     * @return array
+     */
     public static function execute(
-        int    $courseid,
-        int    $page     = 1,
-        int    $perpage  = 10,
-        string $subject  = '',
-        string $topic    = '',
-        string $lesson   = '',
-        bool   $general  = false
+        int  $courseid,
+        bool $generalonly = false,
+        int  $page        = 0,
+        int  $perpage     = 20
     ): array {
         global $DB, $USER;
 
+        // Validate parameters.
         $params = self::validate_parameters(self::execute_parameters(), [
-            'courseid' => $courseid,
-            'page'     => $page,
-            'perpage'  => $perpage,
-            'subject'  => $subject,
-            'topic'    => $topic,
-            'lesson'   => $lesson,
-            'general'  => $general,
+            'courseid'    => $courseid,
+            'generalonly' => $generalonly,
+            'page'        => $page,
+            'perpage'     => $perpage,
         ]);
 
-        $context = context_course::instance($params['courseid']);
+        // Validate context.
+        $context = \context_course::instance($params['courseid']);
         self::validate_context($context);
-        require_capability('block/ai_assistant_v2:use', $context);
 
-        $page    = max(1, (int)$params['page']);
-        $perpage = max(1, min(50, (int)$params['perpage']));
-        $offset  = ($page - 1) * $perpage;
-
-        $tonormalized = static function(string $value): string {
-            $value = trim($value);
-            if ($value === '') {
-                return '';
-            }
-            $value = core_text::strtolower($value);
-            $value = preg_replace('/[^a-z0-9]+/', '_', $value);
-            return trim($value, '_');
-        };
-
-        $sqlparams = [
-            'userid'   => $USER->id,
-            'courseid' => $params['courseid'],
-        ];
-
-        $basesql = 'FROM ' . history_repository::table_sql()
-                 . ' WHERE userid = :userid AND courseid = :courseid';
-
-        if (!empty($params['general'])) {
-            $basesql .= " AND (subject IS NULL OR subject = '' OR subject = :generalvalue)";
-            $sqlparams['generalvalue'] = 'general';
+        // Build query conditions.
+        $conditions = ['userid' => $USER->id];
+        if ($params['generalonly']) {
+            $conditions['courseid'] = 0;
         } else {
-            if ($params['subject'] !== '') {
-                $values = array_values(array_filter(array_unique([
-                    $params['subject'],
-                    $tonormalized($params['subject']),
-                ])));
-                [$insql, $inparams] = $DB->get_in_or_equal($values, SQL_PARAMS_NAMED, 'sub');
-                $basesql   .= " AND subject $insql";
-                $sqlparams += $inparams;
-            }
-            if ($params['topic'] !== '') {
-                $values = array_values(array_filter(array_unique([
-                    $params['topic'],
-                    $tonormalized($params['topic']),
-                ])));
-                [$insql, $inparams] = $DB->get_in_or_equal($values, SQL_PARAMS_NAMED, 'top');
-                $basesql   .= " AND topic $insql";
-                $sqlparams += $inparams;
-            }
-            if ($params['lesson'] !== '') {
-                $values = array_values(array_filter(array_unique([
-                    $params['lesson'],
-                    $tonormalized($params['lesson']),
-                ])));
-                [$insql, $inparams] = $DB->get_in_or_equal($values, SQL_PARAMS_NAMED, 'les');
-                $basesql   .= " AND lesson $insql";
-                $sqlparams += $inparams;
-            }
+            $conditions['courseid'] = $params['courseid'];
         }
 
-        $countsql   = "SELECT COUNT(1) $basesql";
-        $datasql    = "SELECT id, usertext, botresponse, functioncalled, subject, topic, lesson, timecreated $basesql ORDER BY timecreated DESC";
-        $totalcount = (int)$DB->count_records_sql($countsql, $sqlparams);
-        $records    = $DB->get_records_sql($datasql, $sqlparams, $offset, $perpage);
+        $total   = $DB->count_records('block_ai_assistant_v2_history', $conditions);
+        $records = $DB->get_records(
+            'block_ai_assistant_v2_history',
+            $conditions,
+            'timecreated DESC',
+            '*',
+            $params['page'] * $params['perpage'],
+            $params['perpage']
+        );
 
         $items = [];
         foreach ($records as $record) {
-            $botresponse = trim((string)$record->botresponse);
-            $botresponse = preg_replace('/[\s\S]*?<\/think>/is', '', $botresponse);
+            $usertext    = (string)($record->usertext    ?? '');
+            $botresponse = (string)($record->botresponse ?? '');
 
-            // ── phase7_6d: pre-render at fetch time ───────────────────────
-            // Mustache/JS is just a placeholder — PHP renders the HTML once,
-            // JS inserts it directly. No second AJAX round-trip needed.
-            $renderedhtml = render_helper::render($botresponse);
-
-            // Build preview text (MCQ or plain truncated text).
-            $preview = $botresponse;
-            if ((string)$record->functioncalled === 'mcq_agent') {
-                $decoded = json_decode($botresponse, true);
-                if (is_array($decoded) && !empty($decoded['questions']) && is_array($decoded['questions'])) {
-                    $preview = 'MCQ set with ' . count($decoded['questions']) . ' questions';
-                    if (!empty($decoded['difficulty'])) {
-                        $preview .= ' (' . $decoded['difficulty'] . ')';
-                    }
-                }
+            // Build preview text (first 80 chars of bot response, no HTML).
+            $preview = strip_tags($botresponse);
+            $preview = preg_replace('/\s+/', ' ', trim($preview));
+            if (core_text::strlen($preview) > 80) {
+                $preview = core_text::substr($preview, 0, 80) . '…';
             }
 
+            // Phase 7_6f: Pre-render at fetch time so JS does not need a
+            // second AJAX call per history item. renderedhtml is set once here
+            // and injected directly via innerHTML in history.js.
+            $renderedhtml = render_helper::render($botresponse);
+
             $items[] = [
-                'id'             => (int)$record->id,
-                'usertext'       => (string)$record->usertext,
-                'botresponse'    => $botresponse,
-                'renderedhtml'   => $renderedhtml,        // ← NEW in phase7_6d
-                'previewtext'    => $preview,
-                'functioncalled' => (string)$record->functioncalled,
-                'subject'        => (string)$record->subject,
-                'topic'          => (string)$record->topic,
-                'lesson'         => (string)$record->lesson,
-                'timecreated'    => (int)$record->timecreated,
-                'formattedtime'  => userdate(
-                    $record->timecreated,
-                    get_string('strftimedatetimeshort', 'langconfig')
-                ),
+                'id'           => (int)$record->id,
+                'usertext'     => $usertext,
+                'botresponse'  => $botresponse,
+                'renderedhtml' => $renderedhtml,
+                'previewtext'  => $preview,
+                'timecreated'  => (int)$record->timecreated,
+                'courseid'     => (int)$record->courseid,
             ];
         }
 
-        $totalpages = max(1, (int)ceil($totalcount / $perpage));
-
         return [
-            'items'      => $items,
-            'page'       => $page,
-            'perpage'    => $perpage,
-            'totalcount' => $totalcount,
-            'totalpages' => $totalpages,
-            'hasnext'    => $page < $totalpages,
-            'hasprevious' => $page > 1,
+            'items'    => $items,
+            'total'    => $total,
+            'page'     => $params['page'],
+            'perpage'  => $params['perpage'],
+            'totalpages' => $perpage > 0 ? (int)ceil($total / $params['perpage']) : 1,
         ];
     }
 
+    /**
+     * Return structure definition.
+     *
+     * @return external_single_structure
+     */
     public static function execute_returns(): external_single_structure {
         return new external_single_structure([
             'items' => new external_multiple_structure(
                 new external_single_structure([
-                    'id'             => new external_value(PARAM_INT,  'History ID'),
-                    'usertext'       => new external_value(PARAM_RAW,  'User text'),
-                    'botresponse'    => new external_value(PARAM_RAW,  'Bot response (raw)'),
-                    'renderedhtml'   => new external_value(PARAM_RAW,  'Rendered HTML (Markdown+Math) — phase7_6d'),
-                    'previewtext'    => new external_value(PARAM_RAW,  'Preview text'),
-                    'functioncalled' => new external_value(PARAM_TEXT, 'Function called'),
-                    'subject'        => new external_value(PARAM_TEXT, 'Subject'),
-                    'topic'          => new external_value(PARAM_TEXT, 'Topic'),
-                    'lesson'         => new external_value(PARAM_TEXT, 'Lesson'),
-                    'timecreated'    => new external_value(PARAM_INT,  'Creation time'),
-                    'formattedtime'  => new external_value(PARAM_TEXT, 'Formatted time'),
+                    'id'           => new external_value(PARAM_INT,  'Record ID'),
+                    'usertext'     => new external_value(PARAM_RAW,  'User question'),
+                    'botresponse'  => new external_value(PARAM_RAW,  'Raw LLM response'),
+                    'renderedhtml' => new external_value(PARAM_RAW,  'Pre-rendered HTML (Markdown+Math)'),
+                    'previewtext'  => new external_value(PARAM_TEXT, 'Plain text preview'),
+                    'timecreated'  => new external_value(PARAM_INT,  'Unix timestamp'),
+                    'courseid'     => new external_value(PARAM_INT,  'Course ID (0 = general)'),
                 ])
             ),
-            'page'       => new external_value(PARAM_INT,  'Current page'),
-            'perpage'    => new external_value(PARAM_INT,  'Per page'),
-            'totalcount' => new external_value(PARAM_INT,  'Total count'),
-            'totalpages' => new external_value(PARAM_INT,  'Total pages'),
-            'hasnext'    => new external_value(PARAM_BOOL, 'Has next page'),
-            'hasprevious' => new external_value(PARAM_BOOL, 'Has previous page'),
+            'total'      => new external_value(PARAM_INT, 'Total record count'),
+            'page'       => new external_value(PARAM_INT, 'Current page'),
+            'perpage'    => new external_value(PARAM_INT, 'Items per page'),
+            'totalpages' => new external_value(PARAM_INT, 'Total pages'),
         ]);
     }
 }
