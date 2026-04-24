@@ -6,11 +6,11 @@ defined('MOODLE_INTERNAL') || die();
 use block_ai_assistant_v2\local\history_repository;
 use context_course;
 use core_text;
-use external_api;
-use external_function_parameters;
-use external_multiple_structure;
-use external_single_structure;
-use external_value;
+use core_external\external_api;
+use core_external\external_function_parameters;
+use core_external\external_multiple_structure;
+use core_external\external_single_structure;
+use core_external\external_value;
 
 class get_history extends external_api {
     public static function execute_parameters(): external_function_parameters {
