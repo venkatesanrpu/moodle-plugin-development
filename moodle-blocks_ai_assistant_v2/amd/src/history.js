@@ -28,7 +28,18 @@ define(['core/ajax', 'core/notification'], function(Ajax, Notification) {
                 '<div class="block_ai_assistant_v2-historyq"></div>' +
                 '<div class="block_ai_assistant_v2-historya"></div>';
             card.querySelector('.block_ai_assistant_v2-historyq').textContent = item.usertext || '';
-            card.querySelector('.block_ai_assistant_v2-historya').textContent = (item.previewtext || item.botresponse || '').slice(0, 260);
+            const rawPreview = (item.previewtext || item.botresponse || '').slice(0, 320);
+            // Strip common markdown markers for the plain-text preview snippet
+            const cleanPreview = rawPreview
+                .replace(/#{1,6}\s+/g, '')          // headings
+                .replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1') // bold/italic
+                .replace(/`{1,3}[^`]*`{1,3}/g, '')   // inline code / fenced
+                .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')  // links
+                .replace(/^[>\-*+]\s+/gm, '')       // blockquote / list markers
+                // escaped-bracket strip omitted (not needed for preview)
+                .replace(/\s+/g, ' ').trim()
+                .slice(0, 260);
+            card.querySelector('.block_ai_assistant_v2-historya').textContent = cleanPreview;
             list.appendChild(card);
         });
     };

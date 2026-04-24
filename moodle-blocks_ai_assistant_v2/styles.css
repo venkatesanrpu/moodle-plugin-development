@@ -114,10 +114,20 @@
 }
 
 .block_ai_assistant_v2-main {
-    display: grid;
-    grid-template-columns: 300px 360px 1fr;
+    display: flex;           /* switch to flex so body fills remaining space */
     min-height: 420px;
     overflow: hidden;
+}
+
+/* History and MCQ panels have fixed widths; body takes the rest */
+.block_ai_assistant_v2-historypanel {
+    flex: 0 0 290px;
+    max-width: 290px;
+}
+
+.block_ai_assistant_v2-mcqpanel {
+    flex: 0 0 340px;
+    max-width: 340px;
 }
 
 .block_ai_assistant_v2-historypanel,
@@ -126,14 +136,8 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
-}
-
-.block_ai_assistant_v2-historypanel {
     border-right: 1px solid #e5e7eb;
-}
-
-.block_ai_assistant_v2-mcqpanel {
-    border-right: 1px solid #e5e7eb;
+    overflow: hidden;
 }
 
 .block_ai_assistant_v2-historyheader,
@@ -213,6 +217,8 @@
 }
 
 .block_ai_assistant_v2-body {
+    flex: 1 1 0;             /* fills all remaining space regardless of panels */
+    min-width: 0;
     padding: 1rem;
     overflow: auto;
     background: #f8fafc;
@@ -222,8 +228,93 @@
     margin-bottom: 1rem;
     padding: 0.9rem 1rem;
     border-radius: 1rem;
-    line-height: 1.55;
+    line-height: 1.6;
+    /* white-space:pre-wrap removed — it suppresses markdown HTML rendering */
+    word-break: break-word;
+    overflow-wrap: break-word;
+}
+
+/* User bubble keeps literal line-breaks (plain text) */
+.block_ai_assistant_v2-message--user {
     white-space: pre-wrap;
+}
+
+/* ── Prose styles for rendered markdown inside assistant messages ── */
+.block_ai_assistant_v2-message--assistant p {
+    margin: 0 0 0.65em;
+}
+.block_ai_assistant_v2-message--assistant p:last-child {
+    margin-bottom: 0;
+}
+.block_ai_assistant_v2-message--assistant h1,
+.block_ai_assistant_v2-message--assistant h2,
+.block_ai_assistant_v2-message--assistant h3,
+.block_ai_assistant_v2-message--assistant h4 {
+    margin: 0.9em 0 0.4em;
+    font-weight: 700;
+    line-height: 1.3;
+}
+.block_ai_assistant_v2-message--assistant h1 { font-size: 1.25rem; }
+.block_ai_assistant_v2-message--assistant h2 { font-size: 1.1rem; }
+.block_ai_assistant_v2-message--assistant h3 { font-size: 1rem; }
+.block_ai_assistant_v2-message--assistant ul,
+.block_ai_assistant_v2-message--assistant ol {
+    margin: 0.4em 0 0.65em 1.4em;
+    padding: 0;
+}
+.block_ai_assistant_v2-message--assistant li {
+    margin-bottom: 0.3em;
+}
+.block_ai_assistant_v2-message--assistant code {
+    background: #f0f4f8;
+    border-radius: 0.3rem;
+    padding: 0.1em 0.35em;
+    font-size: 0.88em;
+    font-family: ui-monospace, 'Cascadia Code', 'Fira Mono', monospace;
+}
+.block_ai_assistant_v2-message--assistant pre {
+    background: #1e1e2e;
+    color: #cdd6f4;
+    border-radius: 0.6rem;
+    padding: 0.85rem 1rem;
+    overflow-x: auto;
+    margin: 0.65em 0;
+    font-size: 0.85em;
+}
+.block_ai_assistant_v2-message--assistant pre code {
+    background: none;
+    padding: 0;
+    color: inherit;
+    font-size: inherit;
+}
+.block_ai_assistant_v2-message--assistant blockquote {
+    border-left: 3px solid #0f6cbf;
+    margin: 0.5em 0;
+    padding: 0.3em 0.8em;
+    color: #4b5563;
+    background: #f0f6ff;
+    border-radius: 0 0.4rem 0.4rem 0;
+}
+.block_ai_assistant_v2-message--assistant table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0.65em 0;
+    font-size: 0.9em;
+}
+.block_ai_assistant_v2-message--assistant th,
+.block_ai_assistant_v2-message--assistant td {
+    border: 1px solid #e5e7eb;
+    padding: 0.4em 0.65em;
+    text-align: left;
+}
+.block_ai_assistant_v2-message--assistant th {
+    background: #f3f4f6;
+    font-weight: 600;
+}
+/* KaTeX display math — add breathing room */
+.block_ai_assistant_v2-message--assistant .katex-display {
+    margin: 0.75em 0;
+    overflow-x: auto;
 }
 
 .block_ai_assistant_v2-message--user {
@@ -275,11 +366,17 @@
 
 @media (max-width: 1100px) {
     .block_ai_assistant_v2-main {
-        grid-template-columns: 1fr 1fr;
+        flex-wrap: wrap;
     }
-
+    .block_ai_assistant_v2-historypanel,
+    .block_ai_assistant_v2-mcqpanel {
+        flex: 1 1 260px;
+        max-width: 100%;
+        border-right: 0;
+        border-bottom: 1px solid #e5e7eb;
+    }
     .block_ai_assistant_v2-body {
-        grid-column: 1 / -1;
+        flex: 1 1 100%;
         border-top: 1px solid #e5e7eb;
     }
 }
