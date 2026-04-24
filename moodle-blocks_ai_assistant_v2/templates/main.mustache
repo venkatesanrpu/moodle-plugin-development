@@ -1,0 +1,111 @@
+<div id="{{uniqid}}" class="block_ai_assistant_v2-root"
+     data-courseid="{{courseid}}"
+     data-blockinstanceid="{{blockinstanceid}}"
+     data-sesskey="{{sesskey}}"
+     data-agentkey="{{agentkey}}"
+     data-mainsubjectkey="{{mainsubjectkey}}"
+     data-streamurl="{{streamurl}}">
+    <button class="block_ai_assistant_v2-launcher" data-action="open-chat">
+        {{#str}}openwidget, block_ai_assistant_v2{{/str}}
+    </button>
+
+    <section class="block_ai_assistant_v2-shell" data-region="chat-shell" hidden>
+        <header class="block_ai_assistant_v2-header">
+            <div>
+                <strong>{{#str}}pluginname, block_ai_assistant_v2{{/str}}</strong>
+                <div class="block_ai_assistant_v2-subtitle">{{courseshortname}}</div>
+            </div>
+            <div class="block_ai_assistant_v2-toolbar">
+                <button type="button" class="block_ai_assistant_v2-toolbarbtn" data-action="toggle-guided">{{#str}}guidedsearch, block_ai_assistant_v2{{/str}}</button>
+                <button type="button" class="block_ai_assistant_v2-toolbarbtn" data-action="toggle-history">{{#str}}history, block_ai_assistant_v2{{/str}}</button>
+                <button type="button" class="block_ai_assistant_v2-toolbarbtn" data-action="toggle-mcq">{{#str}}mcqpractice, block_ai_assistant_v2{{/str}}</button>
+                <button type="button" class="block_ai_assistant_v2-iconbtn" data-action="close-chat" aria-label="{{#str}}close, block_ai_assistant_v2{{/str}}">&times;</button>
+            </div>
+        </header>
+
+        <div class="block_ai_assistant_v2-guided" data-region="guided-search">
+            <div class="block_ai_assistant_v2-grid">
+                <label>
+                    <span>{{#str}}subject, block_ai_assistant_v2{{/str}}</span>
+                    <select data-region="subject-select">
+                        <option value="">{{#str}}allsubjects, block_ai_assistant_v2{{/str}}</option>
+                    </select>
+                </label>
+                <label>
+                    <span>{{#str}}topic, block_ai_assistant_v2{{/str}}</span>
+                    <select data-region="topic-select" disabled>
+                        <option value="">{{#str}}alltopics, block_ai_assistant_v2{{/str}}</option>
+                    </select>
+                </label>
+                <label>
+                    <span>{{#str}}lesson, block_ai_assistant_v2{{/str}}</span>
+                    <select data-region="lesson-select" disabled>
+                        <option value="">{{#str}}alllessons, block_ai_assistant_v2{{/str}}</option>
+                    </select>
+                </label>
+            </div>
+            <div class="block_ai_assistant_v2-activefilters" data-region="active-filters"></div>
+        </div>
+
+        <div class="block_ai_assistant_v2-main">
+            <aside class="block_ai_assistant_v2-historypanel" data-region="history-panel" hidden>
+                <div class="block_ai_assistant_v2-historyheader">
+                    <strong>{{#str}}history, block_ai_assistant_v2{{/str}}</strong>
+                    <button type="button" class="block_ai_assistant_v2-toolbarbtn" data-action="refresh-history">{{#str}}refresh, block_ai_assistant_v2{{/str}}</button>
+                </div>
+                <div class="block_ai_assistant_v2-historyfilters">
+                    <label><input type="checkbox" data-region="history-general"> {{#str}}generalhistory, block_ai_assistant_v2{{/str}}</label>
+                </div>
+                <div class="block_ai_assistant_v2-historylist" data-region="history-list"></div>
+                <div class="block_ai_assistant_v2-historypager">
+                    <button type="button" class="block_ai_assistant_v2-toolbarbtn" data-action="history-prev">{{#str}}previous, block_ai_assistant_v2{{/str}}</button>
+                    <span data-region="history-pageinfo">1</span>
+                    <button type="button" class="block_ai_assistant_v2-toolbarbtn" data-action="history-next">{{#str}}next, block_ai_assistant_v2{{/str}}</button>
+                </div>
+            </aside>
+
+            <section class="block_ai_assistant_v2-mcqpanel" data-region="mcq-panel" hidden>
+                <div class="block_ai_assistant_v2-historyheader">
+                    <strong>{{#str}}mcqpractice, block_ai_assistant_v2{{/str}}</strong>
+                    <button type="button" class="block_ai_assistant_v2-toolbarbtn" data-action="generate-mcq">{{#str}}generatemcq, block_ai_assistant_v2{{/str}}</button>
+                </div>
+                <div class="block_ai_assistant_v2-mcqcontrols">
+                    <label>
+                        <span>{{#str}}mcqcount, block_ai_assistant_v2{{/str}}</span>
+                        <select data-region="mcq-count">
+                            <option value="5">5</option>
+                            <option value="10" selected>10</option>
+                            <option value="15">15</option>
+                            <option value="20">20</option>
+                        </select>
+                    </label>
+                    <label>
+                        <span>{{#str}}difficulty, block_ai_assistant_v2{{/str}}</span>
+                        <select data-region="mcq-difficulty">
+                            <option value="easy">Easy</option>
+                            <option value="medium" selected>Medium</option>
+                            <option value="hard">Hard</option>
+                            <option value="mixed">Mixed</option>
+                        </select>
+                    </label>
+                </div>
+                <div class="block_ai_assistant_v2-mcqstatus" data-region="mcq-status">{{#str}}mcqready, block_ai_assistant_v2{{/str}}</div>
+                <div class="block_ai_assistant_v2-mcqbody" data-region="mcq-body">
+                    <div class="block_ai_assistant_v2-historyempty">{{#str}}mcqintro, block_ai_assistant_v2{{/str}}</div>
+                </div>
+            </section>
+
+            <div class="block_ai_assistant_v2-body" data-region="chat-body">
+                <div class="block_ai_assistant_v2-empty">{{#str}}chatintro, block_ai_assistant_v2{{/str}}</div>
+            </div>
+        </div>
+
+        <footer class="block_ai_assistant_v2-footer">
+            <div class="block_ai_assistant_v2-status" data-region="status">{{#str}}ready, block_ai_assistant_v2{{/str}}</div>
+            <div class="block_ai_assistant_v2-compose">
+                <textarea data-region="prompt-input" rows="3" placeholder="{{#str}}promptplaceholder, block_ai_assistant_v2{{/str}}"></textarea>
+                <button type="button" class="block_ai_assistant_v2-send" data-action="send-message">{{#str}}send, block_ai_assistant_v2{{/str}}</button>
+            </div>
+        </footer>
+    </section>
+</div>

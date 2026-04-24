@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<XMLDB PATH="blocks/ai_assistant_v2/db" VERSION="2026042307" COMMENT="AI Assistant v2 owned tables">
+  <TABLES>
+    <TABLE NAME="block_ai_assistant_v2_history" COMMENT="Chat and MCQ history for AI Assistant v2">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="courseid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="usertext" TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="botresponse" TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="functioncalled" TYPE="char" LENGTH="100" NOTNULL="false"/>
+        <FIELD NAME="subject" TYPE="char" LENGTH="255" NOTNULL="false"/>
+        <FIELD NAME="topic" TYPE="char" LENGTH="255" NOTNULL="false"/>
+        <FIELD NAME="lesson" TYPE="char" LENGTH="255" NOTNULL="false"/>
+        <FIELD NAME="metadata" TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="useridcourseid_idx" UNIQUE="false" FIELDS="userid, courseid"/>
+      </INDEXES>
+    </TABLE>
+
+    <TABLE NAME="block_ai_assistant_v2_syllabus" COMMENT="Per block instance syllabus JSON for AI Assistant v2">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="blockinstanceid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="agent_key" TYPE="char" LENGTH="255" NOTNULL="false"/>
+        <FIELD NAME="mainsubjectkey" TYPE="char" LENGTH="255" NOTNULL="false"/>
+        <FIELD NAME="syllabus_json" TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="blockinstanceid_uix" UNIQUE="true" FIELDS="blockinstanceid"/>
+      </INDEXES>
+    </TABLE>
+  </TABLES>
+</XMLDB>
