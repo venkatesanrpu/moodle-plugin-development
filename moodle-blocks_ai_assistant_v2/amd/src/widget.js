@@ -16,18 +16,32 @@
 /**
  * Main chat widget for block_ai_assistant_v2.
  *
- * Phase 7_6h — fixes init() to accept a CONTEXT OBJECT passed by
- * $PAGE->requires->js_call_amd(..., [$context]).
+ * Phase 7_6i — Comprehensive fix after full cross-analysis of widget.js
+ * selectors against main.mustache DOM attributes.
  *
- * Root cause of "rootEl.querySelector is not a function":
- *   block_ai_assistant_v2.php passes the full $context array to js_call_amd.
- *   Moodle serialises this as a JS plain object {uniqid, courseid, sesskey...}.
- *   Previous versions of init() expected a string or HTMLElement — not an
- *   object — so rootEl ended up being the plain object, and .querySelector
- *   threw a TypeError.
+ * All 8 bugs found in Phase 7_6h are corrected here.
+ * See PHASE7_6I_NOTES.md for the full bug list.
  *
- * Fix: init() now reads all values directly from the context object and
- * locates the DOM wrapper via context.uniqid.
+ * DOM contract (from main.mustache — DO NOT change selectors without
+ * also updating main.mustache):
+ *
+ *   #{{uniqid}}                              outer wrapper (rootWrapper)
+ *   ├── [data-action="open-chat"]            launcher button (outside shell)
+ *   └── [data-region="chat-shell"]           chat shell section (hidden on load)
+ *       ├── [data-action="close-chat"]       × close button
+ *       ├── [data-action="toggle-guided"]    toolbar: guided search
+ *       ├── [data-action="toggle-history"]   toolbar: history
+ *       ├── [data-action="toggle-mcq"]       toolbar: MCQ
+ *       ├── [data-region="guided-search"]    guided search panel
+ *       ├── [data-region="history-panel"]    history aside
+ *       ├── [data-region="mcq-panel"]        MCQ section
+ *       ├── [data-region="chat-body"]        message display area
+ *       ├── [data-region="status"]           status line
+ *       ├── [data-region="prompt-input"]     <textarea>
+ *       └── [data-action="send-message"]     send button
+ *
+ * NOTE: There is NO .blockaiassistantv2-typing element in the mustache.
+ *       Typing state is shown via the status bar [data-region="status"].
  *
  * @module     block_ai_assistant_v2/widget
  * @copyright  2024 Your Name
@@ -37,28 +51,48 @@
 import Ajax        from 'core/ajax';
 import typesetMath from 'block_ai_assistant_v2/mathjax_helper';
 
-// ─── Selectors ───────────────────────────────────────────────────────────────
+// ─── Selectors — VERIFIED against main.mustache ──────────────────────────────
+// Each selector here maps 1-to-1 to an element in main.mustache.
+// Do not change these without also changing main.mustache.
 
 const SEL = {
-    ROOT:          '[data-region="chat-shell"]',
-    CHAT_BODY:     '.blockaiassistantv2-body',
-    INPUT:         '.blockaiassistantv2-input',
-    SEND_BTN:      '[data-action="send"]',
-    CLOSE_BTN:     '[data-action="close-chat"]',
-    LAUNCHER:      '[data-action="open-chat"]',
-    TYPING_IMG:    '.blockaiassistantv2-typing',
-    MSG_WRAPPER:   '.blockaiassistantv2-messages',
-    GUIDED_BTN:    '[data-action="toggle-guided"]',
-    HISTORY_BTN:   '[data-action="toggle-history"]',
-    MCQ_BTN:       '[data-action="toggle-mcq"]',
-    GUIDED_PANEL:  '[data-region="guided-search"]',
-    HISTORY_PANEL: '[data-region="history-panel"]',
-    MCQ_PANEL:     '[data-region="mcq-panel"]',
+    // Outer wrapper (id="{{uniqid}}")
+    // — accessed via document.getElementById(uniqid), not as a CSS selector.
+
+    // Elements at rootWrapper level (outside the shell):
+    LAUNCHER:      '[data-action="open-chat"]',      // launcher button
+
+    // Chat shell (rootEl after init):
+    SHELL:         '[data-region="chat-shell"]',     // <section hidden>
+
+    // Inside shell:
+    CLOSE_BTN:     '[data-action="close-chat"]',     // × button
+    TOOLBAR_GUIDED:'[data-action="toggle-guided"]',  // toolbar button
+    TOOLBAR_HIST:  '[data-action="toggle-history"]', // toolbar button
+    TOOLBAR_MCQ:   '[data-action="toggle-mcq"]',     // toolbar button
+
+    GUIDED_PANEL:  '[data-region="guided-search"]',  // guided search panel
+    HISTORY_PANEL: '[data-region="history-panel"]',  // history aside
+    MCQ_PANEL:     '[data-region="mcq-panel"]',      // mcq section
+
+    CHAT_BODY:     '[data-region="chat-body"]',      // FIX BUG-3: was wrong class
+    STATUS:        '[data-region="status"]',          // status text line
+
+    // Compose area (inside shell footer):
+    INPUT:         '[data-region="prompt-input"]',   // FIX BUG-2: was wrong class
+    SEND_BTN:      '[data-action="send-message"]',   // FIX BUG-1: was "send", must be "send-message"
+
+    // Guided search selects (inside guided panel):
+    SUBJECT_SELECT:'[data-region="subject-select"]',
+    TOPIC_SELECT:  '[data-region="topic-select"]',
+    LESSON_SELECT: '[data-region="lesson-select"]',
+    ACTIVE_FILTERS:'[data-region="active-filters"]',
 };
 
 // ─── Module state ─────────────────────────────────────────────────────────────
 
-let rootEl        = null;
+let rootWrapper   = null;  // #{{uniqid}} div
+let shellEl       = null;  // [data-region="chat-shell"]
 let courseId      = 0;
 let sesskey       = '';
 let streamUrl     = '';
@@ -66,60 +100,64 @@ let agentKey      = '';
 let mainSubject   = '';
 let activeFilters = {};
 let eventSource   = null;
-let isStreaming    = false;
+let isStreaming   = false;
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Status bar helper ────────────────────────────────────────────────────────
+// BUG-4 / BUG-7 fix: mustache has no .blockaiassistantv2-typing element.
+// Typing state is communicated through the [data-region="status"] bar instead.
+
+const setStatus = (text) => {
+    const el = shellEl.querySelector(SEL.STATUS);
+    if (el) {
+        el.textContent = text;
+    }
+};
+
+// ─── Message helpers ──────────────────────────────────────────────────────────
 
 /**
  * Append a message bubble to the chat body.
  *
+ * BUG-3/5 fix: appends directly to [data-region="chat-body"].
+ * There is no separate messages-wrapper element in main.mustache.
+ *
  * @param {string}  role    'user' | 'assistant'
- * @param {string}  text    Raw text (user) or HTML (assistant).
- * @param {boolean} isHtml  If true, set innerHTML; otherwise set textContent.
- * @returns {HTMLElement}   The created message element.
+ * @param {string}  text    Raw text or HTML.
+ * @param {boolean} isHtml  If true, set innerHTML; otherwise textContent.
+ * @returns {HTMLElement}
  */
 const appendMessage = (role, text, isHtml = false) => {
-    const body  = rootEl.querySelector(SEL.CHAT_BODY);
-    const wrap  = rootEl.querySelector(SEL.MSG_WRAPPER);
-    const msgEl = document.createElement('div');
+    const bodyEl = shellEl.querySelector(SEL.CHAT_BODY);
+    const msgEl  = document.createElement('div');
     msgEl.classList.add(
-        'blockaiassistantv2-message',
-        `blockaiassistantv2-message--${role}`
+        'block_ai_assistant_v2-message',
+        `block_ai_assistant_v2-message--${role}`
     );
     if (isHtml) {
         msgEl.innerHTML = text;
     } else {
         msgEl.textContent = text;
     }
-    if (wrap) {
-        wrap.appendChild(msgEl);
-    } else if (body) {
-        body.appendChild(msgEl);
+    if (bodyEl) {
+        // Remove the empty-state placeholder on first message.
+        const emptyEl = bodyEl.querySelector('.block_ai_assistant_v2-empty');
+        if (emptyEl) {
+            emptyEl.remove();
+        }
+        bodyEl.appendChild(msgEl);
+        msgEl.scrollIntoView({behavior: 'smooth', block: 'end'});
     }
-    msgEl.scrollIntoView({behavior: 'smooth', block: 'end'});
     return msgEl;
 };
 
 /**
- * Show or hide the typing indicator image.
- *
- * @param {boolean} show
- */
-const setTyping = (show) => {
-    const typingEl = rootEl.querySelector(SEL.TYPING_IMG);
-    if (typingEl) {
-        typingEl.hidden = !show;
-    }
-};
-
-/**
- * Disable / enable the send button and input.
+ * Disable / enable the send button and textarea.
  *
  * @param {boolean} disabled
  */
 const setInputDisabled = (disabled) => {
-    const inputEl = rootEl.querySelector(SEL.INPUT);
-    const sendBtn = rootEl.querySelector(SEL.SEND_BTN);
+    const inputEl = shellEl.querySelector(SEL.INPUT);
+    const sendBtn = shellEl.querySelector(SEL.SEND_BTN);
     if (inputEl) {
         inputEl.disabled = disabled;
     }
@@ -131,13 +169,13 @@ const setInputDisabled = (disabled) => {
 // ─── Render complete (called after SSE stream ends) ───────────────────────────
 
 /**
- * Fetch rendered HTML from the server and replace the streaming text node.
+ * Fetch server-rendered HTML and replace the raw streaming text.
  *
- * @param {HTMLElement} answerNode  The message element currently showing raw text.
- * @param {number}      historyId   DB record id returned by the stream endpoint.
+ * @param {HTMLElement} answerNode
+ * @param {number}      historyId
  */
 const renderComplete = (answerNode, historyId) => {
-    setTyping(false);
+    setStatus('Rendering…');
 
     Ajax.call([{
         methodname: 'block_ai_assistant_v2_render_response',
@@ -160,6 +198,7 @@ const renderComplete = (answerNode, historyId) => {
     .finally(() => {
         setInputDisabled(false);
         isStreaming = false;
+        setStatus('Ready');
     });
 };
 
@@ -168,7 +207,7 @@ const renderComplete = (answerNode, historyId) => {
 /**
  * Start an SSE stream for the given prompt.
  *
- * @param {string} prompt  User's question.
+ * @param {string} prompt
  */
 const startStream = (prompt) => {
     if (isStreaming) {
@@ -176,11 +215,10 @@ const startStream = (prompt) => {
     }
     isStreaming = true;
     setInputDisabled(true);
+    setStatus('Thinking…');
 
     appendMessage('user', prompt);
-
     const answerNode = appendMessage('assistant', '');
-    setTyping(true);
 
     const params = new URLSearchParams({
         sesskey:     sesskey,
@@ -213,7 +251,7 @@ const startStream = (prompt) => {
 
             if (firstChunk) {
                 firstChunk = false;
-                setTyping(false);
+                setStatus('Streaming…');
                 if (parsed.historyid) {
                     historyId = parsed.historyid;
                 }
@@ -229,7 +267,7 @@ const startStream = (prompt) => {
                 answerNode.textContent = rawBuffer;
                 answerNode.scrollIntoView({behavior: 'smooth', block: 'end'});
             }
-        } catch (err) {
+        } catch (ignoreParseErr) {
             rawBuffer += data;
             answerNode.textContent = rawBuffer;
         }
@@ -239,8 +277,8 @@ const startStream = (prompt) => {
         eventSource.close();
         eventSource = null;
         isStreaming = false;
-        setTyping(false);
         setInputDisabled(false);
+        setStatus('Ready');
         if (!rawBuffer) {
             answerNode.textContent = '(Connection error. Please try again.)';
         }
@@ -250,7 +288,7 @@ const startStream = (prompt) => {
 // ─── Send handler ─────────────────────────────────────────────────────────────
 
 const handleSend = () => {
-    const inputEl = rootEl.querySelector(SEL.INPUT);
+    const inputEl = shellEl.querySelector(SEL.INPUT);
     if (!inputEl) {
         return;
     }
@@ -262,15 +300,74 @@ const handleSend = () => {
     startStream(prompt);
 };
 
-// ─── Panel toggle helpers ─────────────────────────────────────────────────────
+// ─── Panel toggles ────────────────────────────────────────────────────────────
 
-const togglePanel = (activeRegion) => {
+/**
+ * Toggle a side panel, collapsing the others.
+ *
+ * @param {string} targetRegion  data-region value of the panel to toggle.
+ */
+const togglePanel = (targetRegion) => {
     [SEL.GUIDED_PANEL, SEL.HISTORY_PANEL, SEL.MCQ_PANEL].forEach((sel) => {
-        const el = rootEl.querySelector(sel);
+        const el = shellEl.querySelector(sel);
         if (!el) {
             return;
         }
-        el.hidden = (el.dataset.region !== activeRegion) ? true : !el.hidden;
+        if (el.dataset.region === targetRegion) {
+            el.hidden = !el.hidden;
+        } else {
+            el.hidden = true;
+        }
+    });
+};
+
+// ─── Guided search filter helpers ─────────────────────────────────────────────
+
+/**
+ * Populate the subject/topic/lesson dropdowns from the syllabus.
+ * Called once after init when the guided panel is first opened.
+ */
+const initGuidedSearch = () => {
+    const subjectSel = shellEl.querySelector(SEL.SUBJECT_SELECT);
+    if (!subjectSel || subjectSel.dataset.loaded === '1') {
+        return;
+    }
+    subjectSel.dataset.loaded = '1';
+
+    Ajax.call([{
+        methodname: 'block_ai_assistant_v2_get_syllabus',
+        args: {
+            courseid:       courseId,
+            agentkey:       agentKey,
+            mainsubjectkey: mainSubject,
+        },
+    }])[0]
+    .then((result) => {
+        (result.subjects || []).forEach((s) => {
+            const opt = document.createElement('option');
+            opt.value       = s.key;
+            opt.textContent = s.label;
+            subjectSel.appendChild(opt);
+        });
+        return result;
+    })
+    .catch((err) => {
+        // eslint-disable-next-line no-console
+        window.console.warn('[AI Assistant] get_syllabus error:', err);
+    });
+
+    subjectSel.addEventListener('change', () => {
+        activeFilters.subject = subjectSel.value || '';
+        const topicSel  = shellEl.querySelector(SEL.TOPIC_SELECT);
+        const lessonSel = shellEl.querySelector(SEL.LESSON_SELECT);
+        if (topicSel) {
+            topicSel.innerHTML  = '<option value="">All topics</option>';
+            topicSel.disabled   = !subjectSel.value;
+        }
+        if (lessonSel) {
+            lessonSel.innerHTML = '<option value="">All lessons</option>';
+            lessonSel.disabled  = true;
+        }
     });
 };
 
@@ -282,66 +379,65 @@ const togglePanel = (activeRegion) => {
  * Called by block_ai_assistant_v2.php via:
  *   $PAGE->requires->js_call_amd('block_ai_assistant_v2/widget', 'init', [$context]);
  *
- * Moodle serialises $context (a PHP array) as a plain JS object:
+ * Moodle serialises $context (PHP array) into a plain JS object:
  *   { uniqid, courseid, sesskey, streamurl, agentkey, mainsubjectkey, ... }
  *
- * Phase 7_6h fix: init() reads all values from the context object directly,
- * then locates the DOM wrapper by the uniqid string.
+ * Phase 7_6i: reads all values from context object, finds DOM via getElementById.
  *
  * @param {Object} ctx  Context object from block_ai_assistant_v2.php.
  */
 const init = (ctx) => {
-
-    // ── Phase 7_6h: read from context object ──────────────────────────────
     if (!ctx || typeof ctx !== 'object') {
         return;
     }
 
-    const uniqid = ctx.uniqid || '';
-    courseId     = parseInt(ctx.courseid, 10)  || 0;
-    sesskey      = ctx.sesskey                 || '';
-    streamUrl    = ctx.streamurl               || '';
-    agentKey     = ctx.agentkey                || '';
-    mainSubject  = ctx.mainsubjectkey          || '';
-    // ──────────────────────────────────────────────────────────────────────
+    const uniqid = ctx.uniqid       || '';
+    courseId     = parseInt(ctx.courseid, 10) || 0;
+    sesskey      = ctx.sesskey      || '';
+    streamUrl    = ctx.streamurl    || '';
+    agentKey     = ctx.agentkey     || '';
+    mainSubject  = ctx.mainsubjectkey || '';
 
-    // The Mustache template wraps everything in an element whose id = uniqid.
-    // rootEl is the inner chat-shell; fall back to the wrapper itself.
-    const rootWrapper = uniqid ? document.getElementById(uniqid) : null;
+    rootWrapper = uniqid ? document.getElementById(uniqid) : null;
     if (!rootWrapper) {
         return;
     }
 
-    rootEl = rootWrapper.querySelector(SEL.ROOT) || rootWrapper;
+    shellEl = rootWrapper.querySelector(SEL.SHELL);
+    if (!shellEl) {
+        // Shell element not found — mustache may not have rendered yet.
+        return;
+    }
 
-    // Launcher button (opens the shell).
+    // ── Launcher button (outside shell) ──────────────────────────────────
     const launcherBtn = rootWrapper.querySelector(SEL.LAUNCHER);
     if (launcherBtn) {
         launcherBtn.addEventListener('click', () => {
-            rootEl.hidden = false;
+            shellEl.hidden = false;
             launcherBtn.hidden = true;
         });
     }
 
-    // Close button.
-    const closeBtn = rootEl.querySelector(SEL.CLOSE_BTN);
+    // ── Close button (inside shell) ───────────────────────────────────────
+    const closeBtn = shellEl.querySelector(SEL.CLOSE_BTN);
     if (closeBtn) {
         closeBtn.addEventListener('click', () => {
-            rootEl.hidden = true;
+            shellEl.hidden = true;
             if (launcherBtn) {
                 launcherBtn.hidden = false;
             }
         });
     }
 
-    // Send button.
-    const sendBtn = rootEl.querySelector(SEL.SEND_BTN);
+    // ── Send button ───────────────────────────────────────────────────────
+    // SEL.SEND_BTN = '[data-action="send-message"]' — matches mustache exactly.
+    const sendBtn = shellEl.querySelector(SEL.SEND_BTN);
     if (sendBtn) {
         sendBtn.addEventListener('click', handleSend);
     }
 
-    // Enter key in textarea.
-    const inputEl = rootEl.querySelector(SEL.INPUT);
+    // ── Textarea: Enter key sends ─────────────────────────────────────────
+    const inputEl = shellEl.querySelector(SEL.INPUT);
     if (inputEl) {
         inputEl.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -351,18 +447,21 @@ const init = (ctx) => {
         });
     }
 
-    // Toolbar panel toggles.
-    const guidedBtn = rootEl.querySelector(SEL.GUIDED_BTN);
+    // ── Toolbar panel toggles ─────────────────────────────────────────────
+    const guidedBtn = shellEl.querySelector(SEL.TOOLBAR_GUIDED);
     if (guidedBtn) {
-        guidedBtn.addEventListener('click', () => togglePanel('guided-search'));
+        guidedBtn.addEventListener('click', () => {
+            togglePanel('guided-search');
+            initGuidedSearch();
+        });
     }
 
-    const historyBtn = rootEl.querySelector(SEL.HISTORY_BTN);
+    const historyBtn = shellEl.querySelector(SEL.TOOLBAR_HIST);
     if (historyBtn) {
         historyBtn.addEventListener('click', () => togglePanel('history-panel'));
     }
 
-    const mcqBtn = rootEl.querySelector(SEL.MCQ_BTN);
+    const mcqBtn = shellEl.querySelector(SEL.TOOLBAR_MCQ);
     if (mcqBtn) {
         mcqBtn.addEventListener('click', () => togglePanel('mcq-panel'));
     }
