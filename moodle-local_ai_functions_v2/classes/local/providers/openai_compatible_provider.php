@@ -85,6 +85,14 @@ class openai_compatible_provider implements provider_interface {
         $model = $functionconfig['model'] ?? null;
         $options = array_filter($request['options'] ?? [], static fn($value) => $value !== null);
 
+        // Remap max_output_tokens → max_tokens for chat_completions endpoints.
+        // The Responses API uses max_output_tokens natively; all other
+        // OpenAI-compatible endpoints (Cerebras, Together, Groq, etc.) use max_tokens.
+        if ($apistyle !== 'responses' && isset($options['max_output_tokens'])) {
+            $options['max_tokens'] = $options['max_tokens'] ?? $options['max_output_tokens'];
+            unset($options['max_output_tokens']);
+        }
+
         if ($apistyle === 'responses') {
             $body = [
                 'model' => $model,

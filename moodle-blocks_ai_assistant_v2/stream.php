@@ -65,8 +65,16 @@ try {
         ],
     ];
 
+    // The provider streams SSE directly and emits its own event:done.
+    // Do NOT emit a second done here — that would fire widget's done handler
+    // a second time with an empty finalText and overwrite the saved response.
     local_ai_functions_v2_call_endpoint($agentkey, 'notes_agent', $payload);
-    \block_ai_assistant_v2\local\sse_response::send('done', ['historyid' => $historyid]);
 } catch (Throwable $e) {
-    \block_ai_assistant_v2\local\sse_response::send('error', ['error' => $e->getMessage(), 'historyid' => $historyid]);
+    // Send error with historyid so the client can mark the history row failed.
+    \block_ai_assistant_v2\local\sse_response::send('error', [
+        'error'     => $e->getMessage(),
+        'historyid' => $historyid,
+    ]);
+    // Ensure stream ends cleanly for the browser EventSource.
+    \block_ai_assistant_v2\local\sse_response::send('done', ['historyid' => $historyid]);
 }

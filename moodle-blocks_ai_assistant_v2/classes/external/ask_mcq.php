@@ -78,11 +78,12 @@ class ask_mcq extends external_api {
 
         $payload = [
             'system_prompt' => $systemprompt,
-            'user_prompt' => 'Generate structured MCQs only.',
-            'stream' => false,
-            'options' => [
+            'user_prompt'   => 'Generate structured MCQs only.',
+            'stream'        => false,
+            // response_format is handled by the provider via api_style + json_schema path.
+            // max_tokens is the correct key for chat_completions; the provider remaps it.
+            'options'       => [
                 'max_output_tokens' => 5000,
-                'response_format' => 'json_object',
             ],
         ];
 
