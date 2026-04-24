@@ -1,61 +1,41 @@
 define(['core/ajax', 'core/notification'], function(Ajax, Notification) {
     const state = {};
 
-    const ensureScript = src => new Promise((resolve, reject) => {
-        const existing = document.querySelector('script[data-ai-src="' + src + '"]');
-        if (existing) {
-            if (existing.dataset.loaded === '1') {
-                resolve();
-                return;
-            }
-            existing.addEventListener('load', () => resolve(), {once: true});
-            existing.addEventListener('error', reject, {once: true});
+
+    /**
+     * typesetMath — run MathJax v4 on a single node after innerHTML is set.
+     * MathJax is loaded as a plain <script> by block_ai_assistant_v2.php,
+     * so window.MathJax is guaranteed present before any AMD module runs.
+     * We guard with a ready-check in case of unexpected page load ordering.
+     */
+    const typesetMath = node => {
+        if (!node) {
             return;
         }
-        const tag = document.createElement('script');
-        tag.src = src;
-        tag.async = true;
-        tag.dataset.aiSrc = src;
-        tag.addEventListener('load', () => {
-            tag.dataset.loaded = '1';
-            resolve();
-        }, {once: true});
-        tag.addEventListener('error', reject, {once: true});
-        document.head.appendChild(tag);
-    });
-
-    const ensureCss = href => {
-        if (!document.querySelector('link[data-ai-href="' + href + '"]')) {
-            const tag = document.createElement('link');
-            tag.rel = 'stylesheet';
-            tag.href = href;
-            tag.dataset.aiHref = href;
-            document.head.appendChild(tag);
+        if (window.MathJax && window.MathJax.typesetPromise) {
+            window.MathJax.typesetPromise([node]).catch(() => { /* silent */ });
         }
     };
 
-    const ensureRenderDeps = async() => {
-        ensureCss('https://cdn.jsdelivr.net/npm/katex@0.16.25/dist/katex.min.css');
-        await ensureScript('https://cdn.jsdelivr.net/npm/marked/marked.min.js');
-        await ensureScript('https://cdn.jsdelivr.net/npm/katex@0.16.25/dist/katex.min.js');
-        await ensureScript('https://cdn.jsdelivr.net/npm/katex@0.16.25/dist/contrib/auto-render.min.js');
-    };
-
-    const renderAssistantMessage = async(container, text) => {
-        await ensureRenderDeps();
-        const html = window.marked ? window.marked.parse(text || '') : (text || '');
-        container.innerHTML = html;
-        if (window.renderMathInElement) {
-            window.renderMathInElement(container, {
-                delimiters: [
-                    {left: '$$', right: '$$', display: true},
-                    {left: '$', right: '$', display: false},
-                    {left: '\\(', right: '\\)', display: false},
-                    {left: '\\[', right: '\\]', display: true}
-                ],
-                throwOnError: false
-            });
-        }
+    /**
+     * renderNode — call render_response web service (PHP: Parsedown + math-safe),
+     * set innerHTML of node with returned HTML, then typeset math.
+     *
+     * @param {Element} node        Target DOM node.
+     * @param {number}  historyid   DB row id (already saved).
+     * @param {number}  courseid    Course id for security check.
+     * @returns {Promise}
+     */
+    const renderNode = (node, historyid, courseid) => {
+        return Ajax.call([{
+            methodname: 'block_ai_assistant_v2_render_response',
+            args: {historyid: Number(historyid), courseid: Number(courseid)}
+        }])[0].then(result => {
+            node.innerHTML = result.html || '';
+            typesetMath(node);
+        }).catch(() => {
+            // Render failed — textContent is already set from streaming; leave it.
+        });
     };
 
     const q = (root, selector) => root.querySelector(selector);
@@ -349,19 +329,34 @@ define(['core/ajax', 'core/notification'], function(Ajax, Notification) {
             source._closedByApp = true;
             source.close();
             state[root.id].source = null;
-            renderAssistantMessage(assistantNode, finalText).then(() => {
-                setStatus(root, 'Saving response...');
-                return Ajax.call([{methodname: 'block_ai_assistant_v2_save_history', args: {
-                    courseid: Number(ctx.courseid),
-                    historyid: Number(params.historyid),
-                    botresponse: finalText,
-                    metadata: JSON.stringify({status: 'done', streamed: true, expires: params.expires || 0})
-                }}])[0];
+
+            // Show typing indicator while we save + render server-side.
+            setStatus(root, 'Rendering...');
+            assistantNode.innerHTML = '<span class="block_ai_assistant_v2-typing">'
+                + '<span></span><span></span><span></span></span>';
+
+            // Step 1: save raw markdown to DB.
+            Ajax.call([{methodname: 'block_ai_assistant_v2_save_history', args: {
+                courseid:  Number(ctx.courseid),
+                historyid: Number(params.historyid),
+                botresponse: finalText,
+                metadata: JSON.stringify({status: 'done', streamed: true, expires: params.expires || 0})
+            }}])[0].then(() => {
+                // Step 2: server renders Markdown+Math → safe HTML, set innerHTML.
+                setStatus(root, 'Rendering response...');
+                return renderNode(assistantNode, params.historyid, ctx.courseid);
             }).then(() => {
                 setStatus(root, 'Ready');
                 setBusy(root, false);
+                const body = q(root, '[data-region="chat-body"]');
+                if (body) {
+                    body.scrollTop = body.scrollHeight;
+                }
             }).catch(error => {
+                // Fallback: show raw text if render pipeline fails.
+                assistantNode.textContent = finalText;
                 setBusy(root, false);
+                setStatus(root, 'Ready');
                 Notification.exception(error);
             });
         });

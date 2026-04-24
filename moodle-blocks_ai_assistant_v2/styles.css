@@ -420,3 +420,35 @@
         margin-right: 0;
     }
 }
+
+/* ── Typing indicator (shown while server renders Markdown + Math) ─────── */
+.block_ai_assistant_v2-typing {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 2px;
+}
+.block_ai_assistant_v2-typing span {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0.4;
+    animation: block_ai_typing 1.2s ease-in-out infinite;
+}
+.block_ai_assistant_v2-typing span:nth-child(2) { animation-delay: 0.2s; }
+.block_ai_assistant_v2-typing span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes block_ai_typing {
+    0%, 80%, 100% { transform: scale(0.7); opacity: 0.3; }
+    40%           { transform: scale(1.1); opacity: 1;   }
+}
+/* ── Rendered history answer (Parsedown HTML prose styles) ─────────────── */
+.block_ai_assistant_v2-historya p    { margin: 0.4em 0; }
+.block_ai_assistant_v2-historya ul,
+.block_ai_assistant_v2-historya ol   { padding-left: 1.4em; margin: 0.4em 0; }
+.block_ai_assistant_v2-historya pre  { background: #f4f4f4; padding: 0.6em; border-radius: 4px;
+                                        overflow-x: auto; font-size: 0.88em; }
+.block_ai_assistant_v2-historya code { font-size: 0.9em; background: #f0f0f0;
+                                        padding: 1px 4px; border-radius: 3px; }

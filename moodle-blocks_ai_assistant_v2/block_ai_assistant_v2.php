@@ -48,6 +48,19 @@ class block_ai_assistant_v2 extends block_base {
         ];
 
         $PAGE->requires->css('/blocks/ai_assistant_v2/styles.css');
+
+        // MathJax v4 — loaded locally, configured before script executes.
+        // startup.typeset=false prevents MathJax scanning the whole Moodle page,
+        // which would conflict with any site-wide MathJax v2 filter.
+        // We call MathJax.typesetPromise([node]) manually per rendered node.
+        $mathjaxconfig = "window.MathJax={tex:{inlineMath:[['\\\\(','\\\\)'],['$','$']],"
+            . "displayMath:[['\\\\[','\\\\]'],['$$','$$']],"
+            . "tags:'ams'},"
+            . "options:{skipHtmlTags:['script','noscript','style','textarea','pre']},"
+            . "startup:{typeset:false}};";
+        $PAGE->requires->js_amd_inline($mathjaxconfig);
+        $PAGE->requires->js(new moodle_url('/blocks/ai_assistant_v2/mathjax/tex-chtml.js'), false);
+
         $PAGE->requires->js_call_amd('block_ai_assistant_v2/widget',  'init', [$context]);
         $PAGE->requires->js_call_amd('block_ai_assistant_v2/history', 'init', [$context]);
         $PAGE->requires->js_call_amd('block_ai_assistant_v2/mcq',     'init', [$context]);

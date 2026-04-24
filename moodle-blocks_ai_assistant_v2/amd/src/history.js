@@ -9,37 +9,78 @@ define(['core/ajax', 'core/notification'], function(Ajax, Notification) {
         }
     };
 
+    /**
+     * typesetMath — run MathJax v4 on a node after innerHTML is set.
+     * window.MathJax is guaranteed by block_ai_assistant_v2.php plain-script load.
+     */
+    const typesetMath = node => {
+        if (window.MathJax && window.MathJax.typesetPromise) {
+            window.MathJax.typesetPromise([node]).catch(() => { /* silent */ });
+        }
+    };
+
+    /**
+     * renderHistoryItem — call render_response web service for one history row,
+     * populate the answer node with rendered HTML + typeset math.
+     *
+     * @param {Element} answerNode  Target DOM element for bot answer.
+     * @param {number}  historyid   DB row id.
+     * @param {number}  courseid    Course id.
+     */
+    const renderHistoryItem = (answerNode, historyid, courseid) => {
+        answerNode.innerHTML = '<span class="block_ai_assistant_v2-typing">'
+            + '<span></span><span></span><span></span></span>';
+        Ajax.call([{
+            methodname: 'block_ai_assistant_v2_render_response',
+            args: {historyid: Number(historyid), courseid: Number(courseid)}
+        }])[0].then(result => {
+            answerNode.innerHTML = result.html || '';
+            typesetMath(answerNode);
+        }).catch(() => {
+            answerNode.textContent = '(Could not render response.)';
+        });
+    };
+
     const renderList = (root, items) => {
+        const ctx  = state[root.id].context;
         const list = q(root, '[data-region="history-list"]');
         list.innerHTML = '';
         if (!items.length) {
             const empty = document.createElement('div');
             empty.className = 'block_ai_assistant_v2-historyempty';
-            empty.textContent = 'No history found for the selected filters.';
+            empty.textContent = 'No history found.';
             list.appendChild(empty);
             return;
         }
         items.forEach(item => {
-            const card = document.createElement('article');
-            card.className = 'block_ai_assistant_v2-historyitem';
-            const meta = [item.formattedtime, item.subject, item.topic, item.lesson].filter(Boolean).join(' • ');
-            card.innerHTML = '' +
-                '<div class="block_ai_assistant_v2-historymeta">' + meta + '</div>' +
-                '<div class="block_ai_assistant_v2-historyq"></div>' +
-                '<div class="block_ai_assistant_v2-historya"></div>';
-            card.querySelector('.block_ai_assistant_v2-historyq').textContent = item.usertext || '';
-            const rawPreview = (item.previewtext || item.botresponse || '').slice(0, 320);
-            // Strip common markdown markers for the plain-text preview snippet
-            const cleanPreview = rawPreview
-                .replace(/#{1,6}\s+/g, '')          // headings
-                .replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1') // bold/italic
-                .replace(/`{1,3}[^`]*`{1,3}/g, '')   // inline code / fenced
-                .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')  // links
-                .replace(/^[>\-*+]\s+/gm, '')       // blockquote / list markers
-                // escaped-bracket strip omitted (not needed for preview)
-                .replace(/\s+/g, ' ').trim()
-                .slice(0, 260);
-            card.querySelector('.block_ai_assistant_v2-historya').textContent = cleanPreview;
+            const card = document.createElement('div');
+            card.className = 'block_ai_assistant_v2-historycard';
+            card.dataset.historyid = item.id;
+
+            // Question row — always visible, click to expand/collapse answer.
+            const qNode = document.createElement('div');
+            qNode.className = 'block_ai_assistant_v2-historyq';
+            qNode.textContent = item.usertext || '';
+            qNode.style.cursor = 'pointer';
+
+            // Answer row — hidden by default, lazy-rendered on first expand.
+            const aNode = document.createElement('div');
+            aNode.className = 'block_ai_assistant_v2-historya';
+            aNode.hidden = true;
+            aNode.dataset.rendered = '0';
+
+            card.appendChild(qNode);
+            card.appendChild(aNode);
+
+            // Expand/collapse; trigger render_response only on first open.
+            qNode.addEventListener('click', () => {
+                aNode.hidden = !aNode.hidden;
+                if (!aNode.hidden && aNode.dataset.rendered === '0') {
+                    aNode.dataset.rendered = '1';
+                    renderHistoryItem(aNode, Number(item.id), Number(ctx.courseid));
+                }
+            });
+
             list.appendChild(card);
         });
     };

@@ -47,4 +47,13 @@ $functions = [
         'ajax' => true,
         'capabilities' => 'block/ai_assistant_v2:use',
     ],
+    'block_ai_assistant_v2_render_response' => [
+        'classname'   => 'block_ai_assistant_v2\\external\\render_response',
+        'methodname'  => 'execute',
+        'classpath'   => '',
+        'description' => 'Render raw LLM markdown+math to safe HTML.',
+        'type'        => 'read',
+        'ajax'        => true,
+        'capabilities'=> 'block/ai_assistant_v2:view',
+    ],
 ];
